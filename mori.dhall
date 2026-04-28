@@ -136,11 +136,38 @@ in  Schema.Project::{ project =
         , description = Some "Release changelog"
         , location = Schema.DocLocation.LocalFile "CHANGELOG.md"
         }
-      , Schema.DocRef::{ key = "plans"
-        , kind = Schema.DocKind.Reference
-        , audience = Schema.DocAudience.Internal
-        , description = Some "Execution plans for adapter development"
-        , location = Schema.DocLocation.LocalDir "docs/plans"
+      , Schema.DocRef::{ key = "pgmq-getting-started"
+        , kind = Schema.DocKind.Guide
+        , audience = Schema.DocAudience.User
+        , description = Some
+            "Setting up the PGMQ adapter to consume messages from PostgreSQL-backed queues"
+        , location =
+            Schema.DocLocation.LocalFile "docs/user/pgmq-getting-started.md"
+        }
+      , Schema.DocRef::{ key = "pgmq-advanced"
+        , kind = Schema.DocKind.Guide
+        , audience = Schema.DocAudience.User
+        , description = Some
+            "FIFO ordering, concurrent prefetching, lease extension, and tuning"
+        , location =
+            Schema.DocLocation.LocalFile "docs/user/pgmq-advanced.md"
+        }
+      , Schema.DocRef::{ key = "pgmq-dead-letter-queues"
+        , kind = Schema.DocKind.Guide
+        , audience = Schema.DocAudience.User
+        , description = Some
+            "Configuring DLQ handling, including topic-based routing (pgmq 1.11.0+)"
+        , location =
+            Schema.DocLocation.LocalFile
+              "docs/user/pgmq-dead-letter-queues.md"
+        }
+      , Schema.DocRef::{ key = "pgmq-topic-routing"
+        , kind = Schema.DocKind.Guide
+        , audience = Schema.DocAudience.User
+        , description = Some
+            "AMQP-like topic-based routing with wildcard pattern matching (pgmq 1.11.0+)"
+        , location =
+            Schema.DocLocation.LocalFile "docs/user/pgmq-topic-routing.md"
         }
       , Schema.DocRef::{ key = "hackage"
         , kind = Schema.DocKind.Reference
