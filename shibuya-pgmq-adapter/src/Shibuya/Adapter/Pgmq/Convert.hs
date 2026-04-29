@@ -25,7 +25,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TE
 import Pgmq.Types qualified as Pgmq
 import Shibuya.Core.Ack (DeadLetterReason (..))
-import Shibuya.Core.Types (Cursor (..), Envelope (..), MessageId (..), TraceHeaders)
+import Shibuya.Core.Types (Attempt (..), Cursor (..), Envelope (..), MessageId (..), TraceHeaders)
 
 -- | Convert a pgmq MessageId to a Shibuya MessageId.
 -- pgmq uses Int64, Shibuya uses Text.
@@ -80,6 +80,7 @@ extractTraceHeaders _ = Nothing
 -- | Convert a pgmq Message to a Shibuya Envelope.
 -- The payload is the raw JSON Value from pgmq.
 -- Extracts W3C trace context from headers if present.
+-- Populates the delivery 'attempt' counter from pgmq's 'readCount'.
 pgmqMessageToEnvelope :: Pgmq.Message -> Envelope Value
 pgmqMessageToEnvelope msg =
   Envelope
@@ -88,8 +89,19 @@ pgmqMessageToEnvelope msg =
       partition = extractPartition msg.headers,
       enqueuedAt = Just msg.enqueuedAt,
       traceContext = extractTraceHeaders msg.headers,
+      attempt = Just (readCountToAttempt msg.readCount),
       payload = Pgmq.unMessageBody msg.body
     }
+
+-- | Convert pgmq's @readCount@ (1-based, incremented on read) to a Shibuya
+-- 'Attempt' (0-based delivery counter).
+--
+-- pgmq increments @readCount@ before exposing the message, so on the first
+-- delivery @readCount = 1@ which corresponds to @Attempt 0@. The @max 0@
+-- clamp guards the unexpected @readCount = 0@ case (which pgmq does not
+-- emit but cannot be ruled out at the type level).
+readCountToAttempt :: Int64 -> Attempt
+readCountToAttempt rc = Attempt (fromIntegral (max 0 (rc - 1)))
 
 -- | Create a dead-letter queue payload with optional metadata.
 mkDlqPayload ::

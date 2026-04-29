@@ -8,7 +8,7 @@ import Data.Time (UTCTime (..), fromGregorian)
 import Pgmq.Types qualified as Pgmq
 import Shibuya.Adapter.Pgmq.Convert
 import Shibuya.Core.Ack (DeadLetterReason (..))
-import Shibuya.Core.Types (Cursor (..), Envelope (..), MessageId (..))
+import Shibuya.Core.Types (Attempt (..), Cursor (..), Envelope (..), MessageId (..))
 import Test.Hspec
 import Test.QuickCheck
 
@@ -271,6 +271,34 @@ pgmqMessageToEnvelopeSpec = describe "pgmqMessageToEnvelope" $ do
         msg = mkMessage 42 (String "test") hdrs
         Envelope {traceContext = envTraceContext} = pgmqMessageToEnvelope msg
     envTraceContext `shouldBe` Nothing
+
+  describe "attempt field" $ do
+    let mkMessageWithReadCount rc =
+          Pgmq.Message
+            { messageId = Pgmq.MessageId 42,
+              visibilityTime = sampleTime,
+              enqueuedAt = sampleTime,
+              lastReadAt = Nothing,
+              readCount = rc,
+              body = Pgmq.MessageBody (String "test"),
+              headers = Nothing
+            }
+
+    it "first delivery (readCount=1) -> Attempt 0" $ do
+      let env = pgmqMessageToEnvelope (mkMessageWithReadCount 1)
+      env.attempt `shouldBe` Just (Attempt 0)
+
+    it "first retry (readCount=2) -> Attempt 1" $ do
+      let env = pgmqMessageToEnvelope (mkMessageWithReadCount 2)
+      env.attempt `shouldBe` Just (Attempt 1)
+
+    it "fifth read (readCount=5) -> Attempt 4" $ do
+      let env = pgmqMessageToEnvelope (mkMessageWithReadCount 5)
+      env.attempt `shouldBe` Just (Attempt 4)
+
+    it "boundary readCount=0 clamps to Attempt 0" $ do
+      let env = pgmqMessageToEnvelope (mkMessageWithReadCount 0)
+      env.attempt `shouldBe` Just (Attempt 0)
 
 -- | Tests for mkDlqPayload
 mkDlqPayloadSpec :: Spec
