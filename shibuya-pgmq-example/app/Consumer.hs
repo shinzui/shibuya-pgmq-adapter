@@ -76,6 +76,7 @@ import Shibuya.Metrics (MetricsServerConfig (..), withMetricsServer)
 import Shibuya.Metrics qualified as Metrics
 import Shibuya.Telemetry.Effect (runTracing)
 import System.Environment (getArgs)
+import System.IO (BufferMode (..), hSetBuffering, stderr, stdout)
 import System.Posix.Signals (installHandler, sigINT, sigTERM)
 import System.Posix.Signals qualified as Signals
 import System.Random (randomRIO)
@@ -285,6 +286,8 @@ backoffDemoAdapterConfig =
 
 main :: IO ()
 main = do
+  hSetBuffering stdout LineBuffering
+  hSetBuffering stderr LineBuffering
   args <- getArgs
   case args of
     ("backoff-demo" : rest) ->

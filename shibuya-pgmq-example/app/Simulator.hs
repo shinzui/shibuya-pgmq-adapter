@@ -32,7 +32,8 @@ import Example.Config
     parseQueueTarget,
   )
 import Example.Database
-  ( createQueues,
+  ( backoffDemoQueueName,
+    createQueues,
     notificationsQueueName,
     ordersQueueName,
     paymentsQueueName,
@@ -42,13 +43,22 @@ import Example.Telemetry (withTracing)
 import Hasql.Pool qualified as Pool
 import OpenTelemetry.Trace qualified as OTel
 import OpenTelemetry.Trace.Core qualified as OTelCore
-import Pgmq.Effectful (PgmqRuntimeError, runPgmqTraced)
+import Pgmq.Effectful
+  ( PgmqRuntimeError,
+    SendMessage (..),
+    runPgmq,
+    runPgmqTraced,
+    sendMessage,
+  )
 import Pgmq.Effectful.Traced (sendMessageTraced)
 import Pgmq.Types
   ( MessageBody (..),
+    MessageId (..),
     QueueName,
+    parseQueueName,
   )
 import System.Environment (getArgs, getEnv, lookupEnv)
+import System.IO (BufferMode (..), hSetBuffering, stderr, stdout)
 import System.Random (randomRIO)
 
 --------------------------------------------------------------------------------
@@ -291,6 +301,15 @@ decodePayload bs = case decode bs of
 
 main :: IO ()
 main = do
+  hSetBuffering stdout LineBuffering
+  hSetBuffering stderr LineBuffering
+  rawArgs <- getArgs
+  case rawArgs of
+    ("one-shot" : rest) -> runOneShotMain rest
+    _ -> runDefaultMain
+
+runDefaultMain :: IO ()
+runDefaultMain = do
   Text.putStrLn "=== Shibuya PGMQ Simulator ==="
   Text.putStrLn ""
 
@@ -319,6 +338,56 @@ main = do
 
   Text.putStrLn ""
   Text.putStrLn "Simulator finished."
+
+-- | Enqueue a single message and exit. The companion to the consumer's
+-- @backoff-demo@ subcommand: by default it targets the @backoff_demo@
+-- queue, but the caller can pass any pgmq-valid queue name as the
+-- second argument (e.g. @one-shot orders@).
+--
+-- The message body is a tiny JSON object with the timestamp at which
+-- the simulator enqueued it; the consumer's stdout transcript can then
+-- be visually compared against this anchor.
+runOneShotMain :: [String] -> IO ()
+runOneShotMain args = do
+  Text.putStrLn "=== Shibuya PGMQ One-Shot Simulator ==="
+  Text.putStrLn ""
+
+  qName <- case args of
+    (qStr : _) -> case parseQueueName (Text.pack qStr) of
+      Right q -> pure q
+      Left err -> error $ "Invalid queue name " <> show qStr <> ": " <> show err
+    [] -> pure backoffDemoQueueName
+
+  Text.putStrLn $ "Target queue: " <> Text.pack (show qName)
+
+  connStr <- fmap BS.pack $ getEnv "DATABASE_URL"
+  now <- getCurrentTime
+
+  withDatabasePool connStr $ \pool -> do
+    Text.putStrLn "Creating queues if needed..."
+    createQueues pool
+
+    let payload =
+          MessageBody $
+            object
+              [ "demo" .= ("backoff" :: Text),
+                "enqueuedAt" .= Text.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" now)
+              ]
+        sendArgs =
+          SendMessage
+            { queueName = qName,
+              messageBody = payload,
+              delay = Nothing
+            }
+
+    result :: Either PgmqRuntimeError MessageId <- Effectful.runEff $ runErrorNoCallStack $ runPgmq pool $ sendMessage sendArgs
+    case result of
+      Left err -> Text.putStrLn $ "Error sending message: " <> Text.pack (show err)
+      Right (MessageId mid) ->
+        Text.putStrLn $ "Sent message id=" <> Text.pack (show mid) <> " to queue " <> Text.pack (show qName)
+
+  Text.putStrLn ""
+  Text.putStrLn "One-shot simulator finished."
 
 -- | Check if OpenTelemetry tracing is enabled via environment variable.
 isTracingEnabled :: IO Bool
