@@ -96,6 +96,7 @@ executable shibuya-pgmq-consumer
   build-depends:
     aeson ^>=2.2,
     base ^>=4.21.0.0,
+    containers ^>=0.7,
     effectful ^>=2.6.1.0,
     effectful-core ^>=2.6,
     hasql-pool ^>=1.4,

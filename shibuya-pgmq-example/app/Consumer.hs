@@ -17,16 +17,21 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, takeMVar)
 import Data.Aeson (Value, withObject, (.:))
 import Data.Aeson.Types (Parser, parseMaybe)
+import Data.IORef (IORef, atomicModifyIORef', newIORef)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
-import Data.Time.Clock (secondsToNominalDiffTime)
+import Data.Time.Clock (getCurrentTime, secondsToNominalDiffTime)
 import Effectful (IOE, liftIO, runEff, (:>))
 import Effectful.Error.Static (runErrorNoCallStack)
 import Example.Config (AppConfig (..))
 import Example.Config qualified as Config
 import Example.Database
-  ( createQueues,
+  ( backoffDemoQueueName,
+    createQueues,
     dlqOrdersQueueName,
     dlqPaymentsQueueName,
     notificationsQueueName,
@@ -59,11 +64,18 @@ import Shibuya.App
   )
 import Shibuya.Core.Ack (AckDecision (..), DeadLetterReason (..), RetryDelay (..))
 import Shibuya.Core.Ingested (Ingested (..))
-import Shibuya.Core.Types (Envelope (..), MessageId (..))
+import Shibuya.Core.Retry
+  ( BackoffPolicy (..),
+    Jitter (..),
+    defaultBackoffPolicy,
+    retryWithBackoff,
+  )
+import Shibuya.Core.Types (Attempt (..), Envelope (..), MessageId (..))
 import Shibuya.Handler (Handler)
 import Shibuya.Metrics (MetricsServerConfig (..), withMetricsServer)
 import Shibuya.Metrics qualified as Metrics
 import Shibuya.Telemetry.Effect (runTracing)
+import System.Environment (getArgs)
 import System.Posix.Signals (installHandler, sigINT, sigTERM)
 import System.Posix.Signals qualified as Signals
 import System.Random (randomRIO)
@@ -162,6 +174,51 @@ parseNotification = withObject "Notification" $ \v -> do
   notificationType <- v .: "notificationType"
   pure NotificationInfo {notifInfoUserId = userId, notifInfoType = notificationType}
 
+-- | Backoff-demo handler. Fails the first three deliveries of every
+-- message and succeeds on the fourth, demonstrating the exponential
+-- spacing produced by 'retryWithBackoff'. Each delivery prints a line
+-- showing the wallclock timestamp, message id, framework-tracked
+-- @attempt@ counter, and (on retry) the chosen delay.
+--
+-- The per-message failure count lives in an 'IORef' map keyed by
+-- 'MessageId'. The /delay/ decision is independent of that map; it is
+-- computed by 'retryWithBackoff' from 'envelope.attempt', which the
+-- pgmq adapter populates from pgmq's @read_count@ column. This split
+-- keeps the demo's failure logic from accidentally feeding back into
+-- the framework's delivery counter.
+backoffDemoHandler ::
+  (IOE :> es) =>
+  IORef (Map MessageId Int) ->
+  BackoffPolicy ->
+  Handler es Value
+backoffDemoHandler failuresRef policy ingested = do
+  let env = ingested.envelope
+      msgId = env.messageId
+      attempt = fromMaybe (Attempt 0) env.attempt
+  now <- liftIO getCurrentTime
+  liftIO $
+    Text.putStrLn $
+      "["
+        <> Text.pack (show now)
+        <> "] msg="
+        <> (case msgId of MessageId t -> t)
+        <> " attempt="
+        <> Text.pack (show attempt.unAttempt)
+  currentFails <- liftIO $ atomicModifyIORef' failuresRef $ \m ->
+    let n = Map.findWithDefault 0 msgId m
+     in (Map.insert msgId (n + 1) m, n)
+  if currentFails < 3
+    then do
+      decision <- retryWithBackoff policy env
+      case decision of
+        AckRetry (RetryDelay d) ->
+          liftIO $ Text.putStrLn $ "  -> retry in " <> Text.pack (show d)
+        _ -> pure ()
+      pure decision
+    else do
+      liftIO $ Text.putStrLn "  -> success"
+      pure AckOk
+
 --------------------------------------------------------------------------------
 -- Adapter Configuration
 --------------------------------------------------------------------------------
@@ -207,12 +264,47 @@ notificationsAdapterConfig =
       maxRetries = 1 -- Don't retry notifications much
     }
 
+-- | Backoff demo adapter config: batch=1, short polling, 5 retries.
+--
+-- Five retries permits the handler to fail three times before succeeding
+-- on the fourth delivery without tripping pgmq's auto-DLQ. The 0.25-second
+-- poll interval keeps observed wallclock gaps tight to the logged
+-- @retry in Ts@ values.
+backoffDemoAdapterConfig :: PgmqAdapterConfig
+backoffDemoAdapterConfig =
+  (Pgmq.defaultConfig backoffDemoQueueName)
+    { batchSize = 1,
+      visibilityTimeout = 1,
+      polling = StandardPolling {pollInterval = 0.25},
+      maxRetries = 5
+    }
+
 --------------------------------------------------------------------------------
 -- Main
 --------------------------------------------------------------------------------
 
 main :: IO ()
 main = do
+  args <- getArgs
+  case args of
+    ("backoff-demo" : rest) ->
+      runBackoffDemoMain (parseBackoffPolicy rest)
+    _ -> runDefaultMain
+
+-- | Pick a 'BackoffPolicy' from optional CLI flags.
+--
+-- Recognized:
+--
+-- * @nojitter@ — switches to deterministic 1\/2\/4\/... s spacing,
+--   useful for confirming the math at a glance.
+-- * @equaljitter@ — half-base + uniform half jitter.
+parseBackoffPolicy :: [String] -> BackoffPolicy
+parseBackoffPolicy ["nojitter"] = defaultBackoffPolicy {jitter = NoJitter}
+parseBackoffPolicy ["equaljitter"] = defaultBackoffPolicy {jitter = EqualJitter}
+parseBackoffPolicy _ = defaultBackoffPolicy
+
+runDefaultMain :: IO ()
+runDefaultMain = do
   Text.putStrLn "=== Shibuya PGMQ Consumer ==="
   Text.putStrLn ""
 
@@ -238,6 +330,74 @@ main = do
 
     withTracing tracingEnabled serviceName $ \tracer -> do
       runConsumer pool tracer metricsPort shutdownVar
+
+runBackoffDemoMain :: BackoffPolicy -> IO ()
+runBackoffDemoMain policy = do
+  Text.putStrLn "=== Shibuya PGMQ Backoff Demo ==="
+  Text.putStrLn $ "Policy: " <> Text.pack (show policy)
+  Text.putStrLn ""
+
+  AppConfig {connectionString, tracingEnabled, serviceName} <- Config.loadAppConfig
+
+  shutdownVar <- newEmptyMVar :: IO (MVar ())
+  let signalHandler = Signals.CatchOnce $ putMVar shutdownVar ()
+  _ <- installHandler sigINT signalHandler Nothing
+  _ <- installHandler sigTERM signalHandler Nothing
+
+  withDatabasePool connectionString $ \pool -> do
+    Text.putStrLn "Connected to PostgreSQL"
+    Text.putStrLn "Creating queues if needed..."
+    createQueues pool
+    Text.putStrLn "Queues ready (including backoff_demo)"
+    Text.putStrLn ""
+
+    failuresRef <- newIORef Map.empty
+
+    withTracing tracingEnabled serviceName $ \tracer -> do
+      runBackoffDemoConsumer pool tracer policy failuresRef shutdownVar
+
+runBackoffDemoConsumer ::
+  Pool.Pool ->
+  OTel.Tracer ->
+  BackoffPolicy ->
+  IORef (Map MessageId Int) ->
+  MVar () ->
+  IO ()
+runBackoffDemoConsumer pool tracer policy failuresRef shutdownVar = do
+  eResult <- runEff $ runErrorNoCallStack @PgmqRuntimeError $ runPgmqTraced pool tracer $ runTracing tracer $ do
+    adapter <- pgmqAdapter backoffDemoAdapterConfig
+    liftIO $ Text.putStrLn "Adapter created"
+
+    let proc = mkProcessor adapter (backoffDemoHandler failuresRef policy)
+    result <-
+      runApp
+        IgnoreFailures
+        100
+        [(ProcessorId "backoff-demo", proc)]
+
+    case result of
+      Left err -> do
+        liftIO $ Text.putStrLn $ "Failed to start app: " <> Text.pack (show err)
+      Right appHandle -> do
+        liftIO $ Text.putStrLn "Backoff demo running. Press Ctrl+C to stop."
+        liftIO $ Text.putStrLn ""
+
+        liftIO $ takeMVar shutdownVar
+
+        liftIO $ Text.putStrLn ""
+        liftIO $ Text.putStrLn "Received shutdown signal, stopping gracefully..."
+
+        let shutdownConfig = ShutdownConfig {drainTimeout = 30}
+        drained <- stopAppGracefully shutdownConfig appHandle
+        if drained
+          then liftIO $ Text.putStrLn "All processors drained cleanly"
+          else liftIO $ Text.putStrLn "Some processors were force-stopped"
+
+  case eResult of
+    Left err -> Text.putStrLn $ "Backoff demo error: " <> Text.pack (show err)
+    Right _ -> pure ()
+
+  Text.putStrLn "Backoff demo stopped."
 
 runConsumer ::
   Pool.Pool ->

@@ -14,6 +14,7 @@ module Example.Database
     notificationsQueueName,
     dlqOrdersQueueName,
     dlqPaymentsQueueName,
+    backoffDemoQueueName,
   )
 where
 
@@ -57,6 +58,12 @@ dlqPaymentsQueueName = case parseQueueName "dlq_payments" of
   Left err -> error $ "Invalid queue name: " <> show err
   Right q -> q
 
+-- | Queue used by the @backoff-demo@ subcommand of the consumer/simulator.
+backoffDemoQueueName :: QueueName
+backoffDemoQueueName = case parseQueueName "backoff_demo" of
+  Left err -> error $ "Invalid queue name: " <> show err
+  Right q -> q
+
 -- | Create a connection pool.
 createPool :: ByteString -> IO Pool.Pool
 createPool connStr = do
@@ -85,6 +92,7 @@ createQueues pool = do
   createQueue pool notificationsQueueName
   createQueue pool dlqOrdersQueueName
   createQueue pool dlqPaymentsQueueName
+  createQueue pool backoffDemoQueueName
 
 -- | Install PGMQ schema.
 installSchema :: Pool.Pool -> IO ()
