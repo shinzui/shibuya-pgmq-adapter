@@ -1,6 +1,6 @@
 cabal-version: 3.14
 name: shibuya-pgmq-adapter
-version: 0.3.0.0
+version: 0.4.0.0
 synopsis: PGMQ adapter for the Shibuya queue processing framework
 description:
   A Shibuya adapter that integrates with pgmq (PostgreSQL Message Queue)

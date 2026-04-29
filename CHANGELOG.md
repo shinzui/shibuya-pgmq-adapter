@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.4.0.0 — 2026-04-29
+
+Paired with `shibuya-core 0.4.0.0`.
 
 ### Additions
 
@@ -26,10 +28,9 @@
 
 ### Build
 
-- `shibuya-core ^>= 0.4.0.0` is required (gains the `Envelope.attempt`
-  field and `Shibuya.Core.Retry`). Until 0.4.0.0 is on Hackage, the
-  repo's `cabal.project.local` points at the sibling `shibuya/`
-  checkout.
+- `shibuya-core ^>=0.4.0.0` is required (gains the `Envelope.attempt`
+  field and `Shibuya.Core.Retry`). The published
+  `shibuya-core 0.4.0.0` now satisfies this bound on Hackage.
 
 ## 0.3.0.0 — 2026-04-24
 

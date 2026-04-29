@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.4.0.0 — 2026-04-29
+
+Paired with `shibuya-core 0.4.0.0`.
 
 ### Additions
 
