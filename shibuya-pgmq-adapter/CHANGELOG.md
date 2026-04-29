@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Additions
+
+- Envelopes now carry the delivery `attempt` counter (from pgmq's
+  `readCount`, zero-indexed), enabling exponential backoff via
+  `Shibuya.Core.Retry`. The first delivery sees `Just (Attempt 0)`, the
+  first retry `Just (Attempt 1)`, and so on.
+
+### Internal
+
+- `nominalToSeconds` (in `Shibuya.Adapter.Pgmq.Internal`) now clamps to
+  the `Int32` range instead of silently wrapping. Misconfigured
+  retry/lease durations cap at ~68 years rather than producing
+  undefined behavior on the visibility-timeout offset passed to pgmq.
+
+### Compatibility
+
+- Requires `shibuya-core ^>=0.4.0.0` for the `Attempt` type and the
+  `attempt` field on `Envelope`.
+
 ## 0.3.0.0 — 2026-04-24
 
 Upgraded to `pgmq-hs` 0.2.0.0 series

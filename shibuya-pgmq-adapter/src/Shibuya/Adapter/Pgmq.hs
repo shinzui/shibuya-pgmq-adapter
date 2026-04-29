@@ -43,6 +43,24 @@
 -- 'readCount' exceeds 'maxRetries' in the config, it is automatically
 -- dead-lettered before being passed to the handler.
 --
+-- The current attempt (zero-indexed) is exposed on the envelope as
+-- @envelope.attempt :: Maybe Attempt@. Handlers wanting exponential
+-- backoff can use 'Shibuya.Core.Retry.retryWithBackoff':
+--
+-- @
+-- import Shibuya.Core.Retry (defaultBackoffPolicy, retryWithBackoff)
+--
+-- handler ingested = do
+--   result <- tryProcess ingested.envelope.payload
+--   case result of
+--     Right () -> pure AckOk
+--     Left _  -> retryWithBackoff defaultBackoffPolicy ingested.envelope
+-- @
+--
+-- The adapter clamps any 'Shibuya.Core.Ack.RetryDelay' to fit within
+-- pgmq's @Int32@ second range (~68 years), so a long
+-- 'Shibuya.Core.Retry.BackoffPolicy.maxDelay' is safe.
+--
 -- == FIFO Support
 --
 -- For ordered message processing, configure 'fifoConfig'. Messages are
