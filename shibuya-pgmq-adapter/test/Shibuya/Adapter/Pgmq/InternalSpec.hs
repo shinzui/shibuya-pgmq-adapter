@@ -1,5 +1,7 @@
 module Shibuya.Adapter.Pgmq.InternalSpec (spec) where
 
+import Data.Int (Int32)
+import Data.Time (NominalDiffTime)
 import Pgmq.Hasql.Statements.Types (ReadGrouped (..), ReadMessage (..), ReadWithPollMessage (..))
 import Pgmq.Types (parseQueueName)
 import Shibuya.Adapter.Pgmq.Config
@@ -38,6 +40,21 @@ nominalToSecondsSpec = describe "nominalToSeconds" $ do
 
   it "handles negative (rounds toward positive infinity)" $ do
     nominalToSeconds (-5.1) `shouldBe` (-5)
+
+  describe "clamping" $ do
+    it "exact 30 seconds passes through" $ do
+      nominalToSeconds 30 `shouldBe` 30
+
+    it "rounds up subsecond" $ do
+      nominalToSeconds 0.1 `shouldBe` 1
+
+    it "clamps a 100-year delay to maxBound :: Int32" $ do
+      let hundredYears = 100 * 365 * 24 * 60 * 60 :: NominalDiffTime
+      nominalToSeconds hundredYears `shouldBe` (maxBound :: Int32)
+
+    it "clamps a very large negative delay to minBound :: Int32" $ do
+      let hugelyNegative = negate (100 * 365 * 24 * 60 * 60) :: NominalDiffTime
+      nominalToSeconds hugelyNegative `shouldBe` (minBound :: Int32)
 
 -- | Tests for mkReadMessage
 mkReadMessageSpec :: Spec

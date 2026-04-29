@@ -90,9 +90,26 @@ import Streamly.Data.Stream qualified as Stream
 import Streamly.Data.Stream.Prelude qualified as StreamP
 import Streamly.Data.Unfold qualified as Unfold
 
--- | Convert NominalDiffTime to seconds as Int32 for pgmq.
+-- | Convert 'NominalDiffTime' to seconds as 'Int32', saturating at the
+-- 'Int32' bounds.
+--
+-- Used when extending pgmq visibility timeouts ('AckRetry', 'AckHalt', and
+-- lease extension). pgmq's @changeVisibilityTimeout@ accepts 'Int32'
+-- seconds; values larger than @maxBound@ (~68 years) silently wrap under
+-- the previous @ceiling . nominalDiffTimeToSeconds@ implementation. This
+-- helper saturates instead, so a misconfigured 'BackoffPolicy.maxDelay'
+-- produces a merely-very-long retry rather than a corrupt or
+-- panic-inducing one.
 nominalToSeconds :: NominalDiffTime -> Int32
-nominalToSeconds = ceiling . nominalDiffTimeToSeconds
+nominalToSeconds dt =
+  let seconds :: Double
+      seconds = realToFrac (nominalDiffTimeToSeconds dt)
+      maxSec :: Double
+      maxSec = fromIntegral (maxBound :: Int32)
+      minSec :: Double
+      minSec = fromIntegral (minBound :: Int32)
+      clamped = max minSec (min maxSec seconds)
+   in ceiling clamped
 
 -- | Create a ReadMessage query from config.
 mkReadMessage :: PgmqAdapterConfig -> ReadMessage
