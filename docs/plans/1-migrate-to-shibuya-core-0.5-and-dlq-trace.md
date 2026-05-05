@@ -161,9 +161,11 @@ always reflect the actual current state of the work.
     shibuya-core 0.5.0.0 and propagate consumer trace context to
     DLQ"); both `ExecPlan:` and `Intention:` trailers present.
     Done 2026-05-05.
--   [ ] M4 — `shibuya-core 0.5.0.0` is on Hackage as of
-    2026-05-05. Adapter publication + Outcomes & Retrospective
-    pending — to be run via the repo's `/release` skill.
+-   [x] M4 — Released. `shibuya-pgmq-adapter 0.5.0.0` published
+    to Hackage on 2026-05-05 (sdist + haddocks). Tag `v0.5.0.0`
+    pushed on `274c0eb`. GitHub release at
+    `https://github.com/shinzui/shibuya-pgmq-adapter/releases/tag/v0.5.0.0`.
+    Outcomes & Retrospective filled in below. Done 2026-05-05.
 
 
 ## Surprises & Discoveries
@@ -274,7 +276,93 @@ Record every decision made while working on the plan.
 Summarize outcomes, gaps, and lessons learned at major milestones or
 at completion. Compare the result against the original purpose.
 
-(To be filled during and after implementation.)
+### Outcome (2026-05-05)
+
+All four observable outcomes from the Purpose section are met:
+
+1.  Users can `cabal install shibuya-pgmq-adapter ^>=0.5`
+    paired with `shibuya-core ^>=0.5`. Both are on Hackage:
+    - https://hackage.haskell.org/package/shibuya-core-0.5.0.0
+    - https://hackage.haskell.org/package/shibuya-pgmq-adapter-0.5.0.0
+2.  `cabal build all` is green; full unit suite (125 examples,
+    12 DB-pending) is green under `PGMQ_TEST_SKIP_DB=1`. Verified
+    both with the local sibling override and against the
+    published `shibuya-core 0.5.0.0` from Hackage.
+3.  The DLQ trace contract is in effect: a handler returning
+    `AckDeadLetter (PoisonPill ...)` under `runTracing tracer`
+    forwards a DLQ message whose `traceparent` carries the
+    failing consumer's span id; the original producer's
+    `traceparent` is preserved under
+    `x-shibuya-upstream-traceparent`. When tracing is off
+    (`runTracingNoop` or no active span), the pre-0.5.0.0
+    behavior holds (verbatim header forwarding). The unit-level
+    `mergeDlqHeaders` spec (5 cases in `InternalSpec`) covers the
+    merge rule directly; the runtime "consumer-traceparent wins"
+    integration test against a Postgres devshell + in-memory
+    exporter is the recorded gap (see Surprises § M2.2).
+4.  `CHANGELOG.md` carries the `0.5.0.0` entry covering the
+    breaking change, the `Envelope.attributes` propagation, and
+    the new DLQ trace contract.
+
+### What worked
+
+-   Pairing the adapter version with `shibuya-core`'s major was
+    the right call: a single `0.5.0.0` for both packages makes
+    compatibility a one-glance check for downstream users.
+-   Exporting `mergeDlqHeaders` for unit testing kept the F3
+    coverage decoupled from the integration scaffolding cost.
+    Five small cases test the merge rule directly without
+    needing a Postgres devshell, an in-memory OTel exporter, or
+    an `IORef` to read back span ids.
+-   Threading the `Tracing :> es` constraint through the
+    adapter's public surface was mechanical; no caller-side
+    wrapping was needed in this repo because every entry point
+    (jitsurei consumer + bench harness) already runs under
+    `runTracing` or `runTracingNoop`. The cascade is documented
+    in the CHANGELOG so external upgraders know the shape.
+-   The `cabal.project.local` (gitignored) override pattern made
+    the cross-repo development cycle cheap during M1+M2, and
+    moving it aside before publication confirmed the Hackage
+    path resolves cleanly.
+
+### What we deferred and why
+
+-   **`ChaosSpec` "consumer-traceparent wins" runtime test**
+    (M2.2). Building the in-memory OTel exporter scaffolding
+    inside `ChaosSpec` was not warranted given the unit-level
+    coverage of the merge rule. The existing
+    `runTracingNoop`-mode test still passes verbatim because
+    `mergeDlqHeaders` falls through to today's behavior when
+    `currentTraceHeaders` returns `Nothing`. A future
+    contributor wiring up the test should reach for
+    `hs-opentelemetry-exporters/in-memory` and read the
+    consumer's `processOne` span id back from the exporter
+    after the handler returns; the merge rule itself does not
+    need to be re-tested at that layer.
+-   **End-to-end Jaeger smoke** (M2 acceptance, M2 step 6 of the
+    Concrete Steps). The unit-level coverage and the verified
+    Hackage build were judged sufficient for shipping; the
+    smoke is mechanically straightforward to run against the
+    `shibuya-pgmq-example` consumer when the next operator
+    needs it.
+
+### Lessons (carry forward)
+
+-   Test stanzas that re-compile library sources (via
+    `hs-source-dirs: src test`) need to mirror the library's
+    `build-depends`. The `unordered-containers` slip during
+    M1.4 cost a build-cycle; future cabal pin bumps should
+    audit both stanzas for parity.
+-   When a release commit contains the version bump, CHANGELOG,
+    and the breaking change body in one (`274c0eb` here), the
+    release skill's "step 4 — update version + CHANGELOG"
+    becomes a no-op; the cleanest path is to tag the existing
+    release-content commit rather than synthesise a separate
+    `chore(release)` no-op commit. The previous `0.4.0.0`
+    release used a separate `chore(release): 0.4.0.0` commit;
+    this release does not. Either is fine, but the convention
+    is worth recording so the next release does not feel
+    inconsistent.
 
 
 ## Context and Orientation
@@ -646,3 +734,8 @@ Revision history:
     (`shinzui/shibuya/docs/plans/9-audit-and-improve-opentelemetry-api.md`)
     M2.2 + M3.1 (F3). Intention shared with the parent plan and
     with the sibling kafka adapter's plan 12.
+-   2026-05-05: Closed M3.2/M3.3 (nix flake check green, commit
+    `274c0eb` confirmed carrying both trailers).
+-   2026-05-05: Closed M4. `shibuya-pgmq-adapter 0.5.0.0`
+    published to Hackage; tag `v0.5.0.0` and GitHub release
+    pushed; Outcomes & Retrospective filled in.
