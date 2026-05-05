@@ -19,6 +19,7 @@ where
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.HashMap.Strict qualified as HashMap
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -81,6 +82,15 @@ extractTraceHeaders _ = Nothing
 -- The payload is the raw JSON Value from pgmq.
 -- Extracts W3C trace context from headers if present.
 -- Populates the delivery 'attempt' counter from pgmq's 'readCount'.
+--
+-- 'Envelope.attributes' is left empty: pgmq has no spec-defined typed
+-- messaging-attribute conventions in OpenTelemetry semantic-conventions
+-- v1.27. The framework's @processOne@ already sets the standard
+-- @messaging.system="shibuya"@ default plus the spec-aligned
+-- @messaging.destination.name@ / @messaging.operation@ /
+-- @messaging.message.id@ from the @ProcessorId@ and envelope's
+-- @MessageId@. The field is a forward-compatible hook for the day a
+-- @messaging.pgmq.*@ convention is defined upstream.
 pgmqMessageToEnvelope :: Pgmq.Message -> Envelope Value
 pgmqMessageToEnvelope msg =
   Envelope
@@ -90,6 +100,7 @@ pgmqMessageToEnvelope msg =
       enqueuedAt = Just msg.enqueuedAt,
       traceContext = extractTraceHeaders msg.headers,
       attempt = Just (readCountToAttempt msg.readCount),
+      attributes = HashMap.empty,
       payload = Pgmq.unMessageBody msg.body
     }
 

@@ -14,6 +14,7 @@ module Shibuya.Adapter.Pgmq.Internal
 
     -- * AckHandle Construction
     mkAckHandle,
+    mergeDlqHeaders,
 
     -- * Lease Construction
     mkLease,
@@ -32,10 +33,13 @@ where
 import Control.Concurrent (threadDelay)
 import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson (Value)
+import Data.Aeson (Value (..))
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Function ((&))
 import Data.Int (Int32)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TE
 import Data.Time (NominalDiffTime, nominalDiffTimeToSeconds)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
@@ -85,6 +89,9 @@ import Shibuya.Core.Ack (AckDecision (..), DeadLetterReason (..), RetryDelay (..
 import Shibuya.Core.AckHandle (AckHandle (..))
 import Shibuya.Core.Ingested (Ingested (..))
 import Shibuya.Core.Lease (Lease (..))
+import Shibuya.Core.Types (TraceHeaders)
+import Shibuya.Telemetry.Effect (Tracing)
+import Shibuya.Telemetry.Propagation (currentTraceHeaders)
 import Streamly.Data.Stream (Stream)
 import Streamly.Data.Stream qualified as Stream
 import Streamly.Data.Stream.Prelude qualified as StreamP
@@ -175,8 +182,19 @@ mkLease queueName msgId =
     }
 
 -- | Create an AckHandle for a message.
+--
+-- The 'AckDeadLetter' branch threads the *consumer's* current trace
+-- context (looked up via 'currentTraceHeaders' against the active OTel
+-- span) into the DLQ message's headers. The original producer's
+-- @traceparent@/@tracestate@ are preserved under the
+-- @x-shibuya-upstream-traceparent@ / @x-shibuya-upstream-tracestate@
+-- keys so a DLQ post-mortem can walk back to the origin if it wants.
+-- When tracing is disabled (or there is no active span at the call
+-- site), the original headers are forwarded verbatim — exactly the
+-- pre-0.5.0.0 behavior. See plan 1 / Finding F3 in the parent
+-- shibuya repo's plan 9.
 mkAckHandle ::
-  (Pgmq :> es, IOE :> es) =>
+  (Pgmq :> es, IOE :> es, Tracing :> es) =>
   PgmqAdapterConfig ->
   Pgmq.Message ->
   AckHandle es
@@ -205,12 +223,17 @@ mkAckHandle config msg = AckHandle $ \decision -> do
           -- No DLQ configured - just archive the message
           void $ archiveMessage (MessageQuery queueName msgId)
         Just dlqConfig -> do
-          -- Send to DLQ with metadata, preserving trace context if present
+          -- Build DLQ headers: pull the consumer's current trace
+          -- context (Nothing if tracing is off or no active span);
+          -- merge with the original message's headers (consumer's
+          -- traceparent wins, original preserved under the
+          -- x-shibuya-upstream-* keys).
+          consumerHdrs <- currentTraceHeaders
           let dlqBody = mkDlqPayload msg reason dlqConfig.includeMetadata
+              dlqHeaders = mergeDlqHeaders consumerHdrs msg.headers
           case dlqConfig.dlqTarget of
             DirectQueue dlqQueueName ->
-              -- Send directly to a specific DLQ
-              case msg.headers of
+              case dlqHeaders of
                 Just headers ->
                   void $
                     sendMessageWithHeaders $
@@ -229,8 +252,7 @@ mkAckHandle config msg = AckHandle $ \decision -> do
                           delay = Nothing
                         }
             TopicRoute routingKey ->
-              -- Route via topic pattern matching (pgmq 1.11.0+)
-              case msg.headers of
+              case dlqHeaders of
                 Just headers ->
                   void $
                     sendTopicWithHeaders $
@@ -265,10 +287,62 @@ mkAckHandle config msg = AckHandle $ \decision -> do
     void :: (Functor f) => f a -> f ()
     void = fmap (const ())
 
+-- | Merge the consumer's current trace headers with the original
+-- message's headers JSON for the DLQ-write path.
+--
+-- Rules:
+--
+-- * If the consumer has no active span (tracing disabled, or
+--   producer-side path runs outside any 'withSpan'), forward the
+--   original headers verbatim — matches the pre-0.5.0.0 behavior.
+-- * Otherwise, the consumer's @traceparent@ overrides the original's
+--   active @traceparent@; the original's @traceparent@ /
+--   @tracestate@ (if present) move to
+--   @x-shibuya-upstream-traceparent@ / @x-shibuya-upstream-tracestate@.
+--
+-- Returns 'Nothing' only if both inputs are empty (no consumer
+-- context AND no original headers); in that case the caller falls
+-- through to the no-headers @sendMessage@/@sendTopic@ path.
+mergeDlqHeaders :: Maybe TraceHeaders -> Maybe Value -> Maybe Value
+mergeDlqHeaders Nothing originalHeaders = originalHeaders
+mergeDlqHeaders (Just consumerHdrs) originalHeaders =
+  let originalObj = case originalHeaders of
+        Just (Object obj) -> obj
+        _ -> KeyMap.empty
+      stashedUpstream = stashUpstreamTrace originalObj
+      consumerEntries = traceHeadersToKeyMap consumerHdrs
+      merged = stashedUpstream <> consumerEntries
+   in if KeyMap.null merged
+        then Nothing
+        else Just (Object merged)
+  where
+    -- Move any active @traceparent@/@tracestate@ on the original
+    -- headers under the @x-shibuya-upstream-*@ prefix so the
+    -- consumer's value can take the active slot. Other keys pass
+    -- through unchanged.
+    stashUpstreamTrace obj =
+      foldr
+        (uncurry (rename obj))
+        (KeyMap.delete "traceparent" (KeyMap.delete "tracestate" obj))
+        [ ("traceparent", "x-shibuya-upstream-traceparent"),
+          ("tracestate", "x-shibuya-upstream-tracestate")
+        ]
+    rename src srcKey dstKey acc =
+      case KeyMap.lookup (Key.fromText srcKey) src of
+        Just v -> KeyMap.insert (Key.fromText dstKey) v acc
+        Nothing -> acc
+
+    -- Convert TraceHeaders ([(ByteString, ByteString)]) to a JSON object.
+    traceHeadersToKeyMap hdrs =
+      KeyMap.fromList
+        [ (Key.fromText (TE.decodeUtf8 k), String (TE.decodeUtf8 v))
+        | (k, v) <- hdrs
+        ]
+
 -- | Create an Ingested from a pgmq Message.
 -- Handles auto dead-lettering when maxRetries is exceeded.
 mkIngested ::
-  (Pgmq :> es, IOE :> es) =>
+  (Pgmq :> es, IOE :> es, Tracing :> es) =>
   PgmqAdapterConfig ->
   Pgmq.Message ->
   Eff es (Maybe (Ingested es Value))
@@ -354,7 +428,7 @@ pgmqMessages config =
 -- This stream polls pgmq and yields Ingested messages.
 -- Uses unfoldEach to process ALL messages from each batch, not just the first.
 pgmqSource ::
-  (Pgmq :> es, IOE :> es) =>
+  (Pgmq :> es, IOE :> es, Tracing :> es) =>
   PgmqAdapterConfig ->
   Stream (Eff es) (Ingested es Value)
 pgmqSource config =
@@ -408,7 +482,7 @@ pgmqMessagesPrefetch prefetchConfig config =
 -- source = pgmqSourceWithPrefetch (StreamP.maxBuffer 2) config
 -- @
 pgmqSourceWithPrefetch ::
-  (Pgmq :> es, IOE :> es) =>
+  (Pgmq :> es, IOE :> es, Tracing :> es) =>
   (StreamP.Config -> StreamP.Config) ->
   PgmqAdapterConfig ->
   Stream (Eff es) (Ingested es Value)

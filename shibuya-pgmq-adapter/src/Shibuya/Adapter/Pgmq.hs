@@ -150,6 +150,7 @@ import Shibuya.Adapter.Pgmq.Config
     topicDeadLetter,
   )
 import Shibuya.Adapter.Pgmq.Internal (pgmqSource, pgmqSourceWithPrefetch)
+import Shibuya.Telemetry.Effect (Tracing)
 import Streamly.Data.Stream (Stream)
 import Streamly.Data.Stream qualified as Stream
 import Streamly.Data.Stream.Prelude qualified as StreamP
@@ -189,7 +190,7 @@ import Streamly.Data.Stream.Prelude qualified as StreamP
 -- adapter <- pgmqAdapter config
 -- @
 pgmqAdapter ::
-  (Pgmq :> es, IOE :> es) =>
+  (Pgmq :> es, IOE :> es, Tracing :> es) =>
   PgmqAdapterConfig ->
   Eff es (Adapter es Value)
 pgmqAdapter config = do

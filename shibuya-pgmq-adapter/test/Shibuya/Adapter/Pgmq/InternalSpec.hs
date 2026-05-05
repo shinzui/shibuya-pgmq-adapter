@@ -1,5 +1,9 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Shibuya.Adapter.Pgmq.InternalSpec (spec) where
 
+import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Int (Int32)
 import Data.Time (NominalDiffTime)
 import Pgmq.Hasql.Statements.Types (ReadGrouped (..), ReadMessage (..), ReadWithPollMessage (..))
@@ -9,7 +13,8 @@ import Shibuya.Adapter.Pgmq.Config
     defaultPollingConfig,
   )
 import Shibuya.Adapter.Pgmq.Internal
-  ( mkReadGrouped,
+  ( mergeDlqHeaders,
+    mkReadGrouped,
     mkReadMessage,
     mkReadWithPoll,
     nominalToSeconds,
@@ -22,6 +27,7 @@ spec = do
   mkReadMessageSpec
   mkReadWithPollSpec
   mkReadGroupedSpec
+  mergeDlqHeadersSpec
 
 -- | Tests for nominalToSeconds
 nominalToSecondsSpec :: Spec
@@ -167,3 +173,83 @@ mkReadGroupedSpec = describe "mkReadGrouped" $ do
 
   it "sets qty to batchSize" $ do
     queryQty `shouldBe` 20
+
+-- | Tests for mergeDlqHeaders, the helper that injects the failing
+-- consumer's trace context onto a DLQ message while preserving the
+-- original producer's trace under x-shibuya-upstream-* keys.
+mergeDlqHeadersSpec :: Spec
+mergeDlqHeadersSpec = describe "mergeDlqHeaders" $ do
+  it "with no consumer headers, forwards original headers verbatim" $ do
+    let original =
+          Just $
+            object
+              [ "traceparent" .= ("00-producer-trace-id-pid-01" :: String),
+                "tracestate" .= ("vendor=opaque" :: String),
+                "custom" .= ("value" :: String)
+              ]
+    mergeDlqHeaders Nothing original `shouldBe` original
+
+  it "with no consumer headers and no original, returns Nothing" $ do
+    mergeDlqHeaders Nothing Nothing `shouldBe` Nothing
+
+  it "consumer's traceparent overrides original's, original moves under x-shibuya-upstream-traceparent" $ do
+    let original =
+          Just $
+            object
+              [ "traceparent" .= ("00-producer-trace-id-pid-01" :: String),
+                "tracestate" .= ("vendor=opaque" :: String),
+                "custom" .= ("preserved" :: String)
+              ]
+        consumerHdrs =
+          Just
+            [ ("traceparent", "00-consumer-trace-id-cid-01"),
+              ("tracestate", "consumer=ok")
+            ]
+    case mergeDlqHeaders consumerHdrs original of
+      Just (Object obj) -> do
+        KeyMap.lookup "traceparent" obj
+          `shouldBe` Just (String "00-consumer-trace-id-cid-01")
+        KeyMap.lookup "tracestate" obj
+          `shouldBe` Just (String "consumer=ok")
+        KeyMap.lookup "x-shibuya-upstream-traceparent" obj
+          `shouldBe` Just (String "00-producer-trace-id-pid-01")
+        KeyMap.lookup "x-shibuya-upstream-tracestate" obj
+          `shouldBe` Just (String "vendor=opaque")
+        KeyMap.lookup "custom" obj
+          `shouldBe` Just (String "preserved")
+      other -> expectationFailure $ "expected merged Object, got " <> show other
+
+  it "consumer's headers carry through when original headers are absent" $ do
+    let consumerHdrs =
+          Just
+            [ ("traceparent", "00-consumer-trace-id-cid-01"),
+              ("tracestate", "consumer=ok")
+            ]
+    case mergeDlqHeaders consumerHdrs Nothing of
+      Just (Object obj) -> do
+        KeyMap.lookup "traceparent" obj
+          `shouldBe` Just (String "00-consumer-trace-id-cid-01")
+        KeyMap.lookup "tracestate" obj
+          `shouldBe` Just (String "consumer=ok")
+        KeyMap.lookup "x-shibuya-upstream-traceparent" obj `shouldBe` Nothing
+        KeyMap.lookup "x-shibuya-upstream-tracestate" obj `shouldBe` Nothing
+      other -> expectationFailure $ "expected merged Object, got " <> show other
+
+  it "original's tracestate is stashed even when consumer has no tracestate" $ do
+    let original =
+          Just $
+            object
+              [ "traceparent" .= ("00-producer-trace-id-pid-01" :: String),
+                "tracestate" .= ("vendor=opaque" :: String)
+              ]
+        consumerHdrs = Just [("traceparent", "00-consumer-trace-id-cid-01")]
+    case mergeDlqHeaders consumerHdrs original of
+      Just (Object obj) -> do
+        KeyMap.lookup "traceparent" obj
+          `shouldBe` Just (String "00-consumer-trace-id-cid-01")
+        KeyMap.lookup "tracestate" obj `shouldBe` Nothing
+        KeyMap.lookup "x-shibuya-upstream-traceparent" obj
+          `shouldBe` Just (String "00-producer-trace-id-pid-01")
+        KeyMap.lookup "x-shibuya-upstream-tracestate" obj
+          `shouldBe` Just (String "vendor=opaque")
+      other -> expectationFailure $ "expected merged Object, got " <> show other

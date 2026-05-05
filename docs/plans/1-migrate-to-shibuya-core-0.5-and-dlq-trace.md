@@ -85,41 +85,29 @@ be documented here, even if it requires splitting a partially
 completed task into two ("done" vs. "remaining"). This section must
 always reflect the actual current state of the work.
 
--   [ ] M1.1 — Update `shibuya-pgmq-adapter/cabal.project.local` to
-    pin both `../shibuya/shibuya-core` and
-    `../shibuya/shibuya-metrics` (it currently does — verify the
-    comment still reads accurately and update the version note
-    from "shibuya-core 0.4.0.0 is unreleased" to
-    "shibuya-core 0.5.0.0 is unreleased").
--   [ ] M1.2 — Audit every direct `Envelope { ... }` record
-    construction in the repo (library, tests, jitsurei, benchmark)
-    and record the call sites that need an `attributes` field
-    added. Expect:
-    `shibuya-pgmq-adapter/src/Shibuya/Adapter/Pgmq/Convert.hs`
-    (the `pgmqMessageToEnvelope` body) and any test fixtures.
-    Anything else discovered is a Surprise.
--   [ ] M1.3 — In
-    `shibuya-pgmq-adapter/src/Shibuya/Adapter/Pgmq/Convert.hs`'s
-    `pgmqMessageToEnvelope`, add `attributes = HashMap.empty`
-    (with the matching `Data.HashMap.Strict qualified as HashMap`
-    import). Document inline with a brief comment that pgmq
-    intentionally contributes no broker-specific typed attributes
-    today.
--   [ ] M1.4 — Bump the `shibuya-core` build-depends pin in every
-    cabal file (library, bench, example) from `^>=0.4` /
-    `^>=0.4.0.0` to `^>=0.5`. Bump the package's own `version:`
-    from `0.4.0.0` to `0.5.0.0` in
-    `shibuya-pgmq-adapter/shibuya-pgmq-adapter.cabal` and the
-    bench / example cabal files. Bump the
-    `shibuya-metrics` pin too if present.
--   [ ] M1.5 — Update existing tests: any direct `Envelope { ... }`
-    construction must add `attributes = HashMap.empty`. Run
-    `cabal test shibuya-pgmq-adapter-test:unit` (or whatever the
-    fast test target is) and confirm it passes. Property tests
-    in `Shibuya.Adapter.Pgmq.PropertySpec` and
-    `Shibuya.Adapter.Pgmq.ConvertSpec` are the most likely places
-    to need touch-ups.
--   [ ] M2.1 — Implement F3 in
+-   [x] M1.1 — `cabal.project.local` comment refreshed to name
+    `shibuya-core 0.5.0.0 is unreleased`. The two `packages:`
+    entries (`../shibuya/shibuya-core`,
+    `../shibuya/shibuya-metrics`) are unchanged. Done 2026-05-05.
+-   [x] M1.2 — Audit found one direct `Envelope { ... }` literal
+    in the library
+    (`shibuya-pgmq-adapter/src/Shibuya/Adapter/Pgmq/Convert.hs::pgmqMessageToEnvelope`).
+    No test fixtures construct an `Envelope` literal — tests build
+    via `pgmqMessageToEnvelope` from a `Pgmq.Message`. Done
+    2026-05-05.
+-   [x] M1.3 — `pgmqMessageToEnvelope` populates
+    `attributes = HashMap.empty`. Documented with a comment that
+    pgmq has no spec-defined typed messaging conventions today.
+    Done 2026-05-05.
+-   [x] M1.4 — `shibuya-core` build-depends pin bumped to
+    `^>=0.5.0.0` in `shibuya-pgmq-adapter.cabal` (library + test
+    stanzas). Package version bumped to `0.5.0.0`. The bench and
+    example cabal files do not pin `shibuya-core` explicitly, so
+    they pick up the bound transitively. Done 2026-05-05.
+-   [x] M1.5 — No test fixtures needed updating (M1.2). All 125
+    unit-tagged tests pass under `PGMQ_TEST_SKIP_DB=1` (12 DB-
+    requiring tests pending). Done 2026-05-05.
+-   [x] M2.1 — F3 implemented in
     `shibuya-pgmq-adapter/src/Shibuya/Adapter/Pgmq/Internal.hs`'s
     `mkAckHandle` `AckDeadLetter` branch:
     1.  Inside the branch, call
@@ -144,52 +132,33 @@ always reflect the actual current state of the work.
     4.  Add a `Tracing :> es` constraint to `mkAckHandle`'s
         signature. Update the call site
         (`mkIngested` in the same file).
--   [ ] M2.2 — Update the existing
-    `Shibuya.Adapter.Pgmq.ChaosSpec` "preserves trace headers when
-    moving to DLQ" case
-    (`shibuya-pgmq-adapter/test/Shibuya/Adapter/Pgmq/ChaosSpec.hs:196-265`)
-    to reflect the new contract:
-    -   Rename the case to "DLQ write injects consumer's trace
-        context, preserving the original under
-        `x-shibuya-upstream-traceparent`".
-    -   Wrap the test with `runTracing tracer` (using an in-memory
-        exporter as the `SemanticSpec` in shibuya-core does) so
-        there is an active span at DLQ-write time.
-    -   Assert: the DLQ message's `traceparent` is **not** the
-        original producer's (it should encode the active
-        consumer's `processOne` span); the
-        `x-shibuya-upstream-traceparent` header equals the original
-        producer's `traceparent`; same for `tracestate`.
-    -   Add a sibling case "DLQ write without tracing falls back
-        to today's behavior (forwards original headers verbatim)"
-        — exercise the `runTracingNoop` path and assert the DLQ
-        message still carries the producer's `traceparent` under
-        the active key.
--   [ ] M2.3 — Add a new test
-    `shibuya-pgmq-adapter/test/Shibuya/Adapter/Pgmq/InternalSpec.hs`
-    case (or in `ConvertSpec` if more appropriate) that exercises
-    the merge function in isolation: given a JSON object of
-    original headers and a `Maybe TraceHeaders` from
-    `currentTraceHeaders`, the merged result has the expected
-    keys. This is the unit-level property test; M2.2 is the
-    integration-level test against a real Postgres.
--   [ ] M3.1 — Update
-    `shibuya-pgmq-adapter/CHANGELOG.md` with a `0.5.0.0` entry
-    that records: the `shibuya-core` upgrade, the
-    `Envelope.attributes` visibility, and the new DLQ trace
-    contract.
--   [ ] M3.2 — Run the local gates: `nix flake check`,
-    `cabal build all`, `cabal test
-    shibuya-pgmq-adapter-test:unit`, and the property/convert
-    suites. Document any deltas in Surprises.
--   [ ] M3.3 — Commit. Push. Open a PR (if applicable). Each
-    commit carries both `ExecPlan: docs/plans/1-migrate-to-shibuya-core-0.5-and-dlq-trace.md`
-    and `Intention: intention_01kh0akd82ekat0be54p2f72kv` trailers.
--   [ ] M4 — After `shibuya-core 0.5.0.0` publishes to Hackage
-    (separate operation, outside this repo), publish
-    `shibuya-pgmq-adapter 0.5.0.0` per the existing release
-    process. Update Outcomes & Retrospective with the
-    published-version transcript.
+-   [/] M2.2 — `Shibuya.Adapter.Pgmq.ChaosSpec`'s "preserves trace
+    headers when moving to DLQ" case is **left unchanged for
+    now**: it runs under `runTracingNoop`, so
+    `currentTraceHeaders` returns `Nothing` and `mergeDlqHeaders`
+    falls through to forwarding the original headers verbatim,
+    which is exactly the current assertion. The DLQ-with-tracing
+    integration test (consumer-traceparent wins) is deferred — it
+    requires a Postgres devshell + an in-memory exporter setup
+    that doesn't exist in `ChaosSpec` today; see Surprises for
+    the trade-off. The unit-level coverage in M2.3 below is
+    sufficient for the F3 logic itself.
+-   [x] M2.3 — Added `mergeDlqHeaders` to
+    `Shibuya.Adapter.Pgmq.Internal`'s exported surface and added
+    five `InternalSpec.hs` cases asserting the merge contract:
+    no-consumer fall-through, no-input-no-output,
+    consumer-overrides-with-stash, consumer-only-no-original,
+    partial-original-tracestate. All 5 pass. Done 2026-05-05.
+-   [x] M3.1 — `CHANGELOG.md` `0.5.0.0` entry recorded. Done
+    2026-05-05.
+-   [/] M3.2 — `cabal build all` is green; `cabal test
+    shibuya-pgmq-adapter-test --test-options="--match=/mergeDlqHeaders/"`
+    is green (5/5); full unit suite under `PGMQ_TEST_SKIP_DB=1`
+    is green (125/125 tests, 12 DB-pending). `nix flake check`
+    not yet run.
+-   [ ] M3.3 — Commit (in progress).
+-   [ ] M4 — Outcomes & Retrospective + publication, after
+    `shibuya-core 0.5.0.0` publishes to Hackage.
 
 
 ## Surprises & Discoveries
@@ -197,7 +166,44 @@ always reflect the actual current state of the work.
 Document unexpected behaviours, bugs, optimizations, or insights
 discovered during implementation. Provide concise evidence.
 
-(None yet.)
+### M1.4 — `unordered-containers` needed in test stanza too (2026-05-05)
+
+`shibuya-pgmq-adapter.cabal`'s test stanza re-compiles the library's
+`Convert.hs` and `Internal.hs` against the test stanza's
+`build-depends` set rather than reusing the library build artifact
+(it lists `src` under `hs-source-dirs` alongside `test`). When
+`Convert.hs` started importing `Data.HashMap.Strict`, the test
+stanza's build broke because `unordered-containers` was not in its
+`build-depends`. Fix: add the pin to both library and test stanzas.
+
+### M2.2 — ChaosSpec "tracing-on" assertion deferred (2026-05-05)
+
+The plan originally called for renaming the existing
+`Shibuya.Adapter.Pgmq.ChaosSpec` "preserves trace headers when
+moving to DLQ" case and rewriting it to assert the new contract
+under `runTracing tracer`. On closer inspection the existing case
+is **still correct** — it runs under `runTracingNoop`, which is
+the path that `mergeDlqHeaders` falls through to verbatim. The
+real "consumer-traceparent wins" assertion needs (a) a
+Postgres-backed run, (b) an in-memory exporter standing in for
+the OTLP endpoint, and (c) a way to read the consumer's
+`processOne`-span id back from the exporter to compare against
+the DLQ message's header. That is a larger scaffolding change
+than the F3 logic itself, and the unit-level
+`mergeDlqHeaders` spec covers the merge contract directly.
+Recorded so a future contributor knows the runtime test is the
+remaining gap, not a missing feature.
+
+### M2.1 — Producer-side `Tracing` constraint propagates broadly (2026-05-05)
+
+Adding the `Tracing :> es` constraint to `mkAckHandle` cascaded
+through `mkIngested`, `pgmqSource`, `pgmqSourceWithPrefetch`, and
+`pgmqAdapter` (the public surface). All call sites in this repo
+(jitsurei consumer + bench harness) already run under `runTracing`
+or `runTracingNoop` so the cascade did not require additional
+caller-side wrapping; an external caller upgrading to 0.5.0.0
+must add either `runTracing tracer` or `runTracingNoop` to their
+effect stack. CHANGELOG calls this out under Breaking Changes.
 
 
 ## Decision Log
