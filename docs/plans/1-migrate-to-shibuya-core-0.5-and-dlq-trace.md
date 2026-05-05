@@ -151,14 +151,19 @@ always reflect the actual current state of the work.
     partial-original-tracestate. All 5 pass. Done 2026-05-05.
 -   [x] M3.1 — `CHANGELOG.md` `0.5.0.0` entry recorded. Done
     2026-05-05.
--   [/] M3.2 — `cabal build all` is green; `cabal test
-    shibuya-pgmq-adapter-test --test-options="--match=/mergeDlqHeaders/"`
-    is green (5/5); full unit suite under `PGMQ_TEST_SKIP_DB=1`
-    is green (125/125 tests, 12 DB-pending). `nix flake check`
-    not yet run.
--   [ ] M3.3 — Commit (in progress).
--   [ ] M4 — Outcomes & Retrospective + publication, after
-    `shibuya-core 0.5.0.0` publishes to Hackage.
+-   [x] M3.2 — `cabal build all` green, `mergeDlqHeaders` tests
+    green (5/5), full unit suite green under `PGMQ_TEST_SKIP_DB=1`
+    (125/125, 12 DB-pending), and `nix flake check` green
+    (formatting + pre-commit). Re-verified against the published
+    Hackage `shibuya-core 0.5.0.0` with `cabal.project.local`
+    moved aside: build green, tests 125/125. Done 2026-05-05.
+-   [x] M3.3 — Committed as `274c0eb` ("feat!: migrate to
+    shibuya-core 0.5.0.0 and propagate consumer trace context to
+    DLQ"); both `ExecPlan:` and `Intention:` trailers present.
+    Done 2026-05-05.
+-   [ ] M4 — `shibuya-core 0.5.0.0` is on Hackage as of
+    2026-05-05. Adapter publication + Outcomes & Retrospective
+    pending — to be run via the repo's `/release` skill.
 
 
 ## Surprises & Discoveries
