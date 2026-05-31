@@ -36,6 +36,7 @@ The visible result is a dependency and telemetry compatibility upgrade rather th
 - `OpenTelemetry.Trace.shutdownTracerProvider` in `hs-opentelemetry-sdk-1.0.0.0` now takes a timeout argument and returns a `ShutdownResult`, so the example has to call `shutdownTracerProvider provider Nothing` and discard the result in both real and no-op tracing paths.
 - `cabal test --enable-tests shibuya-pgmq-adapter-test --test-options='--match /Convert/'` compiled and passed but selected zero examples. The full adapter suite is the meaningful validation for the existing trace-header and DLQ behavior.
 - Running duplicate Cabal builds for the same example package concurrently can race in `dist-newstyle` package registration. The transient `package.conf.inplace` removal failure disappeared when the builds were rerun sequentially.
+- The local `jaeger` executable on `PATH` is Jaeger backend v2.15.0. Running it with no flags starts the default all-in-one in-memory configuration, including OTLP HTTP on `127.0.0.1:4318` and the query/UI API on `localhost:16686`.
 
 
 ## Decision Log
@@ -81,9 +82,12 @@ cabal build shibuya-pgmq-adapter-bench:bench:shibuya-pgmq-adapter-bench
 cabal build all
 PGMQ_TEST_SKIP_DB=1 cabal test --enable-tests shibuya-pgmq-adapter-test
 cabal test --enable-tests shibuya-pgmq-adapter-test
+jaeger
+env DATABASE_URL='postgresql:///shibuya_pgmq_adapter?host=/Users/shinzui/Keikaku/bokuno/shibuya-project/shibuya-pgmq-adapter/db' OTEL_TRACING_ENABLED=true OTEL_SERVICE_NAME=shibuya-pgmq-consumer OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf OTEL_SEMCONV_STABILITY_OPT_IN=messaging,database cabal run shibuya-pgmq-consumer
+env DATABASE_URL='postgresql:///shibuya_pgmq_adapter?host=/Users/shinzui/Keikaku/bokuno/shibuya-project/shibuya-pgmq-adapter/db' OTEL_TRACING_ENABLED=true OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf OTEL_SEMCONV_STABILITY_OPT_IN=messaging,database cabal run shibuya-pgmq-simulator -- --queue orders --count 3 --rate 10
 ```
 
-Both adapter test runs passed. The skip-db run reported 125 examples, 0 failures, and 12 pending database-dependent examples. The full database-backed run reported 125 examples and 0 failures. Runtime OTLP export was not exercised against a collector in this change.
+Both adapter test runs passed. The skip-db run reported 125 examples, 0 failures, and 12 pending database-dependent examples. The full database-backed run reported 125 examples and 0 failures. Runtime OTLP export was exercised against the local Jaeger executable on `PATH`. Jaeger's API reported services `shibuya-pgmq-consumer` and `unknown_service:shibuya-pgmq-simulator`, operations including `orders process`, `publish orders`, and `pgmq.delete orders`, and traces for the three sent orders. The `orders process` Shibuya spans carried `messaging.operation.type = "process"` and `messaging.system = "shibuya"`. The `publish orders`, `receive orders`, and `pgmq.delete orders` PGMQ spans carried stable attributes such as `messaging.operation.name`, `messaging.operation.type`, `db.system.name`, and `db.operation.name`.
 
 
 ## Context and Orientation
