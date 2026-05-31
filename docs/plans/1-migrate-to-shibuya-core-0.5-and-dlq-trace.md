@@ -1,6 +1,14 @@
-# Migrate to shibuya-core 0.5.0.0 and propagate consumer trace context on DLQ writes
+---
+id: 1
+slug: migrate-to-shibuya-core-0.5-and-dlq-trace
+title: "Migrate to shibuya-core 0.5.0.0 and propagate consumer trace context on DLQ writes"
+kind: exec-plan
+created_at: 2026-05-05T23:08:17Z
+intention: "intention_01kh0akd82ekat0be54p2f72kv"
+---
 
-Intention: intention_01kh0akd82ekat0be54p2f72kv
+
+# Migrate to shibuya-core 0.5.0.0 and propagate consumer trace context on DLQ writes
 
 This ExecPlan is a living document. The sections Progress, Surprises &
 Discoveries, Decision Log, and Outcomes & Retrospective must be kept up
