@@ -18,3 +18,4 @@ db/
 .dev/
 CLAUDE.local.md
 .agents/
+.mina/
