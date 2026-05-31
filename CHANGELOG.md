@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.0.0 — 2026-05-31
+
+Paired with `shibuya-core 0.6.0.0`.
+
+### Compatibility
+
+- Bumps `shibuya-core` to `^>=0.6.0.0`, `pgmq-hs` packages
+  (`pgmq-core`, `pgmq-hasql`, `pgmq-effectful`, `pgmq-migration`) to
+  `^>=0.3`, and the example OpenTelemetry packages to `^>=1.0`.
+- Removes the `hs-opentelemetry` git source override from
+  `cabal.project`; the required 1.0 packages are now available from
+  Hackage. The local `cabal.project.local` Shibuya override is no
+  longer needed for a release-ready build.
+
+### OpenTelemetry
+
+- Tracks Shibuya's `0.6.0.0` semantic-conventions change: processing
+  spans now use `messaging.operation.type = "process"` instead of the
+  deprecated `messaging.operation = "process"` wire key.
+- The example's tracer-provider shutdown path now passes the
+  OpenTelemetry 1.0 timeout argument to `shutdownTracerProvider`.
+
 ## 0.5.0.0 — 2026-05-05
 
 Paired with `shibuya-core 0.5.0.0`.

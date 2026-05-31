@@ -22,6 +22,7 @@ module Example.Telemetry
 where
 
 import Control.Exception (bracket)
+import Control.Monad (void)
 import Data.Text (Text)
 import OpenTelemetry.Attributes qualified as Attr
 import OpenTelemetry.Trace qualified as OTel
@@ -46,7 +47,7 @@ withRealTracing :: Text -> (OTel.Tracer -> IO a) -> IO a
 withRealTracing serviceName action =
   bracket
     OTel.initializeGlobalTracerProvider
-    OTel.shutdownTracerProvider
+    (\provider -> void $ OTel.shutdownTracerProvider provider Nothing)
     $ \provider -> do
       let tracer = OTel.makeTracer provider instrumentationLib OTel.tracerOptions
       action tracer
@@ -61,10 +62,13 @@ withRealTracing serviceName action =
 
 -- | Create a no-op tracer and run action.
 withNoopTracing :: Text -> (OTel.Tracer -> IO a) -> IO a
-withNoopTracing _serviceName action = do
-  provider <- OTel.createTracerProvider [] OTel.emptyTracerProviderOptions
-  let tracer = OTel.makeTracer provider noopLib OTel.tracerOptions
-  action tracer
+withNoopTracing _serviceName action =
+  bracket
+    (OTel.createTracerProvider [] OTel.emptyTracerProviderOptions)
+    (\provider -> void $ OTel.shutdownTracerProvider provider Nothing)
+    $ \provider -> do
+      let tracer = OTel.makeTracer provider noopLib OTel.tracerOptions
+      action tracer
   where
     noopLib =
       OTel.InstrumentationLibrary

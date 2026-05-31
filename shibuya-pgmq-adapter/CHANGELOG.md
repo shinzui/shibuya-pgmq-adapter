@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.0.0 — 2026-05-31
+
+Paired with `shibuya-core 0.6.0.0`.
+
+### Compatibility
+
+- Upgrades the adapter package to the current dependency family:
+  `shibuya-core ^>=0.6.0.0`, `pgmq-core ^>=0.3`,
+  `pgmq-hasql ^>=0.3`, `pgmq-effectful ^>=0.3`, and
+  test-only `pgmq-migration ^>=0.3`.
+- No adapter API changes were required. `pgmqAdapter` and the
+  `Envelope` conversion behavior remain the same.
+
+### OpenTelemetry
+
+- Shibuya processor spans now use the stable
+  `messaging.operation.type = "process"` key from
+  `shibuya-core 0.6.0.0`.
+- PGMQ operation spans are provided by `pgmq-effectful 0.3.0.0`, which
+  builds on `hs-opentelemetry` 1.0 and supports old, stable, or
+  duplicate messaging/database semantic-convention attributes via
+  `OTEL_SEMCONV_STABILITY_OPT_IN`.
+
 ## 0.4.0.0 — 2026-04-29
 
 Paired with `shibuya-core 0.4.0.0`.

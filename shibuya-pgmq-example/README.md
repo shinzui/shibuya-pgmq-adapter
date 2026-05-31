@@ -63,6 +63,8 @@ cabal run shibuya-pgmq-consumer
 # With tracing enabled
 export OTEL_TRACING_ENABLED=true
 export OTEL_SERVICE_NAME=shibuya-pgmq-example
+# Optional: emit stable OpenTelemetry messaging/database attributes
+export OTEL_SEMCONV_STABILITY_OPT_IN=messaging,database
 cabal run shibuya-pgmq-consumer
 ```
 
@@ -90,6 +92,7 @@ cabal run shibuya-pgmq-simulator -- --queue notifications --count 1000 --batch-s
 | `DATABASE_URL` | PostgreSQL connection string | (required) |
 | `OTEL_TRACING_ENABLED` | Enable OpenTelemetry tracing | `false` |
 | `OTEL_SERVICE_NAME` | Service name for traces | `shibuya-pgmq-example` |
+| `OTEL_SEMCONV_STABILITY_OPT_IN` | Select OpenTelemetry semantic-convention mode (`messaging,database` for stable attributes, `messaging/dup,database/dup` for old and stable attributes) | unset |
 | `METRICS_PORT` | HTTP port for metrics server | `9090` |
 
 ### Simulator
