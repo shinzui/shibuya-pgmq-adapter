@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0.0 — 2026-06-05
+
+### Changed
+
+- Require `shibuya-core ^>=0.7.0.0`. `Envelope` now carries a
+  `headers :: Maybe Headers` field; `pgmqMessageToEnvelope` sets it to
+  `Nothing`, because pgmq messages do not carry an ordered, raw broker-header
+  stream (the per-message JSONB `headers` object remains the source for the
+  partition hint and W3C trace context, surfaced via `partition` and
+  `traceContext`). A `Future:` note in `Shibuya.Adapter.Pgmq.Convert` records
+  the option of surfacing producer-supplied pgmq headers later.
+- Lower `cabal-version` from `3.14` to `3.12` in all packages so Nix
+  toolchains with an older bundled Cabal can build the adapter. No
+  package-description syntax requiring 3.14 was in use.
+
 ## 0.6.0.0 — 2026-05-31
 
 Paired with `shibuya-core 0.6.0.0`.

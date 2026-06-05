@@ -83,6 +83,22 @@ extractTraceHeaders _ = Nothing
 -- Extracts W3C trace context from headers if present.
 -- Populates the delivery 'attempt' counter from pgmq's 'readCount'.
 --
+-- 'Envelope.headers' is 'Nothing': pgmq does not deliver an ordered,
+-- duplicate-allowing raw broker-header stream. The per-message JSONB
+-- @headers@ object is unordered user metadata and is consumed here only
+-- to derive @partition@ and @traceContext@; it is deliberately not
+-- re-presented as broker headers.
+--
+-- Future: if handlers need to read arbitrary producer-supplied pgmq
+-- headers (beyond the @x-pgmq-group@/@traceparent@/@tracestate@ keys we
+-- already special-case), we could surface them here by flattening the
+-- JSONB @headers@ object into @Just [(key, value)]@ (UTF-8-encoding
+-- string-valued entries; deciding how to encode non-string JSON values).
+-- This was considered and deferred because the object is unordered with
+-- unique keys, so the mapping into the ordered, duplicate-allowing
+-- 'Headers' type is inherently lossy. Revisit if a concrete use case
+-- appears.
+--
 -- 'Envelope.attributes' is left empty: pgmq has no spec-defined typed
 -- messaging-attribute conventions in OpenTelemetry semantic-conventions
 -- v1.27. The framework's @processOne@ already sets the standard
@@ -99,6 +115,7 @@ pgmqMessageToEnvelope msg =
       partition = extractPartition msg.headers,
       enqueuedAt = Just msg.enqueuedAt,
       traceContext = extractTraceHeaders msg.headers,
+      headers = Nothing,
       attempt = Just (readCountToAttempt msg.readCount),
       attributes = HashMap.empty,
       payload = Pgmq.unMessageBody msg.body

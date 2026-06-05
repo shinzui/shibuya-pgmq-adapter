@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.7.0.0 — 2026-06-05
+
+Paired with `shibuya-core 0.7.0.0`.
+
+### Breaking Changes
+
+- Tracks the new `Envelope.headers :: Maybe Headers` field added in
+  `shibuya-core 0.7.0.0`. `pgmqMessageToEnvelope` sets it to `Nothing`:
+  pgmq does not deliver an ordered, duplicate-allowing raw broker-header
+  stream. The per-message JSONB `headers` object is unordered user
+  metadata and is consumed only to derive `partition` and
+  `traceContext`, so it is deliberately not re-presented as broker
+  headers. Callers that construct `Envelope` by record literal (e.g.
+  test fixtures) must add `headers = Nothing`. A `Future:` note in
+  `Shibuya.Adapter.Pgmq.Convert` records the option of surfacing
+  producer-supplied pgmq headers later — deferred because the JSONB
+  object's unordered, unique-key shape maps lossily onto the ordered,
+  duplicate-allowing `Headers` type.
+
+### Compatibility
+
+- Requires `shibuya-core ^>=0.7.0.0` for the `headers` field on
+  `Envelope`. The bound is bumped in the library and test stanzas.
+- Lowers `cabal-version` from `3.14` to `3.12` so Nix toolchains with an
+  older bundled Cabal can build the adapter. No package-description
+  syntax requiring 3.14 was in use.
+
+### Tests
+
+- `Shibuya.Adapter.Pgmq.ConvertSpec` gains two cases asserting `headers`
+  is `Nothing`, including one where the pgmq JSONB `headers` object is
+  non-empty.
+
 ## 0.6.0.0 — 2026-05-31
 
 Paired with `shibuya-core 0.6.0.0`.

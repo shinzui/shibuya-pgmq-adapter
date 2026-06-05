@@ -272,6 +272,17 @@ pgmqMessageToEnvelopeSpec = describe "pgmqMessageToEnvelope" $ do
         Envelope {traceContext = envTraceContext} = pgmqMessageToEnvelope msg
     envTraceContext `shouldBe` Nothing
 
+  it "does not surface broker headers (headers is Nothing) when no headers" $ do
+    let msg = mkMessage 42 (String "test") Nothing
+        Envelope {headers = envHeaders} = pgmqMessageToEnvelope msg
+    envHeaders `shouldBe` Nothing
+
+  it "leaves headers Nothing even when the JSONB headers object is non-empty" $ do
+    let hdrs = Just $ object ["x-pgmq-group" .= ("tenant-a" :: Text.Text), "custom" .= ("v" :: Text.Text)]
+        msg = mkMessage 42 (String "test") hdrs
+        Envelope {headers = envHeaders} = pgmqMessageToEnvelope msg
+    envHeaders `shouldBe` Nothing
+
   describe "attempt field" $ do
     let mkMessageWithReadCount rc =
           Pgmq.Message
