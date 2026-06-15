@@ -26,6 +26,7 @@ import Pgmq.Types (MessageBody (..), QueueName)
 import Shibuya.Adapter.Pgmq.Config
   ( PgmqAdapterConfig (..),
     PollingConfig (..),
+    defaultPollRetryConfig,
   )
 import Shibuya.Adapter.Pgmq.Convert (pgmqMessageToEnvelope)
 import Shibuya.Core.Types (Envelope (..))
@@ -310,6 +311,7 @@ _mkConfig queueName =
       visibilityTimeout = 30,
       batchSize = 1,
       polling = StandardPolling {pollInterval = 0.1}, -- Fast polling for tests
+      pollRetry = defaultPollRetryConfig,
       deadLetterConfig = Nothing,
       maxRetries = 3,
       fifoConfig = Nothing,
@@ -324,6 +326,7 @@ _mkConfigWithBatchSize qName bs =
       visibilityTimeout = 30,
       batchSize = bs,
       polling = StandardPolling {pollInterval = 0.1},
+      pollRetry = defaultPollRetryConfig,
       deadLetterConfig = Nothing,
       maxRetries = 3,
       fifoConfig = Nothing,

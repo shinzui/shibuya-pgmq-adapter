@@ -44,6 +44,8 @@ import Data.Time (NominalDiffTime, nominalDiffTimeToSeconds)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Effectful (Eff, IOE, (:>))
+import Effectful.Error.Static (Error, catchError, throwError)
+import Pgmq.Effectful (PgmqRuntimeError, isTransient)
 import Pgmq.Effectful.Effect
   ( Pgmq,
     archiveMessage,
@@ -79,6 +81,7 @@ import Shibuya.Adapter.Pgmq.Config
     FifoConfig (..),
     FifoReadStrategy (..),
     PgmqAdapterConfig (..),
+    PollRetryConfig (..),
     PollingConfig (..),
   )
 import Shibuya.Adapter.Pgmq.Convert
@@ -368,11 +371,30 @@ mkIngested config msg = do
 -- Each element is a Vector of messages from a single poll.
 -- This is the lowest-level stream that handles polling logic.
 pgmqChunks ::
-  (Pgmq :> es, IOE :> es) =>
+  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es) =>
   PgmqAdapterConfig ->
   Stream (Eff es) (Vector Pgmq.Message)
-pgmqChunks config = Stream.repeatM poll
+pgmqChunks config = Stream.repeatM (pollRetrying 1 initialBackoff)
   where
+    PollRetryConfig
+      { maxAttempts = retryMaxAttempts,
+        initialBackoff = initialBackoff,
+        maxBackoff = retryMaxBackoff
+      } = config.pollRetry
+
+    pollRetrying ::
+      (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es) =>
+      Int ->
+      NominalDiffTime ->
+      Eff es (Vector Pgmq.Message)
+    pollRetrying attempt backoff =
+      poll `catchError` \_callStack err ->
+        if isTransient err && attempt < retryMaxAttempts
+          then do
+            liftIO $ threadDelay (nominalToMicros backoff)
+            pollRetrying (attempt + 1) (min (backoff * 2) retryMaxBackoff)
+          else throwError err
+
     poll :: (Pgmq :> es, IOE :> es) => Eff es (Vector Pgmq.Message)
     poll = case config.fifoConfig of
       Nothing -> pollNonFifo
@@ -413,7 +435,7 @@ pgmqChunks config = Stream.repeatM poll
 -- Uses Streamly's unfoldEach to expand each Vector into individual elements,
 -- ensuring ALL messages from each batch are processed (not just the first).
 pgmqMessages ::
-  (Pgmq :> es, IOE :> es) =>
+  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es) =>
   PgmqAdapterConfig ->
   Stream (Eff es) Pgmq.Message
 pgmqMessages config =
@@ -428,7 +450,7 @@ pgmqMessages config =
 -- This stream polls pgmq and yields Ingested messages.
 -- Uses unfoldEach to process ALL messages from each batch, not just the first.
 pgmqSource ::
-  (Pgmq :> es, IOE :> es, Tracing :> es) =>
+  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es, Tracing :> es) =>
   PgmqAdapterConfig ->
   Stream (Eff es) (Ingested es Value)
 pgmqSource config =
@@ -443,7 +465,7 @@ pgmqSource config =
 -- bufferSize * batchSize * avgProcessingTime < visibilityTimeout to avoid
 -- messages re-appearing before they're processed.
 pgmqChunksPrefetch ::
-  (Pgmq :> es, IOE :> es) =>
+  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es) =>
   (StreamP.Config -> StreamP.Config) ->
   PgmqAdapterConfig ->
   Stream (Eff es) (Vector Pgmq.Message)
@@ -454,7 +476,7 @@ pgmqChunksPrefetch prefetchConfig config =
 -- | Flatten prefetched message chunks into individual messages.
 -- Like pgmqMessages but with concurrent prefetching of batches.
 pgmqMessagesPrefetch ::
-  (Pgmq :> es, IOE :> es) =>
+  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es) =>
   (StreamP.Config -> StreamP.Config) ->
   PgmqAdapterConfig ->
   Stream (Eff es) Pgmq.Message
@@ -482,7 +504,7 @@ pgmqMessagesPrefetch prefetchConfig config =
 -- source = pgmqSourceWithPrefetch (StreamP.maxBuffer 2) config
 -- @
 pgmqSourceWithPrefetch ::
-  (Pgmq :> es, IOE :> es, Tracing :> es) =>
+  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es, Tracing :> es) =>
   (StreamP.Config -> StreamP.Config) ->
   PgmqAdapterConfig ->
   Stream (Eff es) (Ingested es Value)

@@ -5,6 +5,7 @@ module Shibuya.Adapter.Pgmq.Config
 
     -- * Polling Configuration
     PollingConfig (..),
+    PollRetryConfig (..),
 
     -- * Dead-Letter Queue Configuration
     DeadLetterConfig (..),
@@ -24,6 +25,7 @@ module Shibuya.Adapter.Pgmq.Config
     -- * Defaults
     defaultConfig,
     defaultPollingConfig,
+    defaultPollRetryConfig,
     defaultPrefetchConfig,
   )
 where
@@ -45,6 +47,8 @@ data PgmqAdapterConfig = PgmqAdapterConfig
     batchSize :: !Int32,
     -- | Polling configuration
     polling :: !PollingConfig,
+    -- | Retry policy for transient errors during queue polling
+    pollRetry :: !PollRetryConfig,
     -- | Optional dead-letter queue configuration
     deadLetterConfig :: !(Maybe DeadLetterConfig),
     -- | Maximum retries before dead-lettering (default: 3)
@@ -55,6 +59,17 @@ data PgmqAdapterConfig = PgmqAdapterConfig
     -- | Optional concurrent prefetch configuration
     -- When enabled, polls ahead while processing current messages
     prefetchConfig :: !(Maybe PrefetchConfig)
+  }
+  deriving stock (Show, Eq, Generic)
+
+-- | Retry policy for transient database errors during queue polling.
+data PollRetryConfig = PollRetryConfig
+  { -- | Total attempts per poll, including the first attempt
+    maxAttempts :: !Int,
+    -- | Delay before the first retry
+    initialBackoff :: !NominalDiffTime,
+    -- | Maximum delay between retry attempts
+    maxBackoff :: !NominalDiffTime
   }
   deriving stock (Show, Eq, Generic)
 
@@ -149,6 +164,15 @@ data PrefetchConfig = PrefetchConfig
 defaultPollingConfig :: PollingConfig
 defaultPollingConfig = StandardPolling {pollInterval = 1}
 
+-- | Default retry policy for transient poll errors.
+defaultPollRetryConfig :: PollRetryConfig
+defaultPollRetryConfig =
+  PollRetryConfig
+    { maxAttempts = 5,
+      initialBackoff = 0.1,
+      maxBackoff = 5
+    }
+
 -- | Default prefetch configuration.
 -- Buffers 4 batches ahead, balancing latency with visibility timeout safety.
 defaultPrefetchConfig :: PrefetchConfig
@@ -173,6 +197,7 @@ defaultConfig name =
       visibilityTimeout = 30,
       batchSize = 1,
       polling = defaultPollingConfig,
+      pollRetry = defaultPollRetryConfig,
       deadLetterConfig = Nothing,
       maxRetries = 3,
       fifoConfig = Nothing,

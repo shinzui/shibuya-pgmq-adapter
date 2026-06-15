@@ -75,6 +75,7 @@ module Shibuya.Adapter.Pgmq
     -- * Configuration
     PgmqAdapterConfig (..),
     PollingConfig (..),
+    PollRetryConfig (..),
     DeadLetterConfig (..),
     DeadLetterTarget (..),
     FifoConfig (..),
@@ -88,6 +89,7 @@ module Shibuya.Adapter.Pgmq
     -- * Defaults
     defaultConfig,
     defaultPollingConfig,
+    defaultPollRetryConfig,
     defaultPrefetchConfig,
 
     -- * Topic Management (pgmq 1.11.0+)
@@ -118,6 +120,8 @@ import Control.Monad (forM_)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value)
 import Effectful (Eff, IOE, (:>))
+import Effectful.Error.Static (Error)
+import Pgmq.Effectful (PgmqRuntimeError)
 import Pgmq.Effectful.Effect (Pgmq)
 import Pgmq.Effectful.Effect qualified as PgmqEff
 import Pgmq.Hasql.Statements.Types qualified as PgmqTypes
@@ -141,9 +145,11 @@ import Shibuya.Adapter.Pgmq.Config
     FifoConfig (..),
     FifoReadStrategy (..),
     PgmqAdapterConfig (..),
+    PollRetryConfig (..),
     PollingConfig (..),
     PrefetchConfig (..),
     defaultConfig,
+    defaultPollRetryConfig,
     defaultPollingConfig,
     defaultPrefetchConfig,
     directDeadLetter,
@@ -190,7 +196,7 @@ import Streamly.Data.Stream.Prelude qualified as StreamP
 -- adapter <- pgmqAdapter config
 -- @
 pgmqAdapter ::
-  (Pgmq :> es, IOE :> es, Tracing :> es) =>
+  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es, Tracing :> es) =>
   PgmqAdapterConfig ->
   Eff es (Adapter es Value)
 pgmqAdapter config = do

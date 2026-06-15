@@ -8,6 +8,7 @@ spec :: Spec
 spec = do
   defaultConfigSpec
   defaultPollingConfigSpec
+  defaultPollRetryConfigSpec
   defaultPrefetchConfigSpec
   deadLetterTargetSpec
   smartConstructorSpec
@@ -34,6 +35,9 @@ defaultConfigSpec = describe "defaultConfig" $ do
       StandardPolling interval -> interval `shouldBe` 1
       _ -> expectationFailure "Expected StandardPolling"
 
+  it "uses the default poll retry policy" $ do
+    config.pollRetry `shouldBe` defaultPollRetryConfig
+
   it "sets deadLetterConfig to Nothing" $ do
     config.deadLetterConfig `shouldBe` Nothing
 
@@ -58,6 +62,23 @@ defaultPollingConfigSpec = describe "defaultPollingConfig" $ do
     case defaultPollingConfig of
       StandardPolling interval -> interval `shouldBe` 1
       _ -> expectationFailure "Expected StandardPolling"
+
+defaultPollRetryConfigSpec :: Spec
+defaultPollRetryConfigSpec = describe "defaultPollRetryConfig" $ do
+  let PollRetryConfig
+        { maxAttempts = retryMaxAttempts,
+          initialBackoff = retryInitialBackoff,
+          maxBackoff = retryMaxBackoff
+        } = defaultPollRetryConfig
+
+  it "retries five total attempts by default" $ do
+    retryMaxAttempts `shouldBe` 5
+
+  it "starts with a 100ms backoff" $ do
+    retryInitialBackoff `shouldBe` 0.1
+
+  it "caps backoff at five seconds" $ do
+    retryMaxBackoff `shouldBe` 5
 
 -- | Tests for defaultPrefetchConfig
 defaultPrefetchConfigSpec :: Spec

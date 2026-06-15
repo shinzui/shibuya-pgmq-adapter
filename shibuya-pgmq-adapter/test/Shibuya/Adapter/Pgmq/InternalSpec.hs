@@ -4,12 +4,23 @@ module Shibuya.Adapter.Pgmq.InternalSpec (spec) where
 
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int32)
-import Data.Time (NominalDiffTime)
+import Data.Time (NominalDiffTime, UTCTime (..), fromGregorian)
+import Data.Vector qualified as Vector
+import Effectful (Eff, IOE, liftIO, runEff)
+import Effectful.Dispatch.Dynamic (interpret)
+import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
+import Hasql.Errors qualified as HasqlErrors
+import Pgmq.Effectful (Pgmq, PgmqRuntimeError (..))
+import Pgmq.Effectful.Effect qualified as PgmqEffect
 import Pgmq.Hasql.Statements.Types (ReadGrouped (..), ReadMessage (..), ReadWithPollMessage (..))
-import Pgmq.Types (parseQueueName)
+import Pgmq.Types (Message (..), MessageBody (..), MessageId (..), parseQueueName)
 import Shibuya.Adapter.Pgmq.Config
   ( PgmqAdapterConfig (..),
+    PollRetryConfig (..),
+    PollingConfig (..),
+    defaultPollRetryConfig,
     defaultPollingConfig,
   )
 import Shibuya.Adapter.Pgmq.Internal
@@ -18,7 +29,9 @@ import Shibuya.Adapter.Pgmq.Internal
     mkReadMessage,
     mkReadWithPoll,
     nominalToSeconds,
+    pgmqChunks,
   )
+import Streamly.Data.Stream qualified as Stream
 import Test.Hspec
 
 spec :: Spec
@@ -27,6 +40,7 @@ spec = do
   mkReadMessageSpec
   mkReadWithPollSpec
   mkReadGroupedSpec
+  pollRetrySpec
   mergeDlqHeadersSpec
 
 -- | Tests for nominalToSeconds
@@ -74,6 +88,7 @@ mkReadMessageSpec = describe "mkReadMessage" $ do
             visibilityTimeout = 60,
             batchSize = 10,
             polling = defaultPollingConfig,
+            pollRetry = defaultPollRetryConfig,
             deadLetterConfig = Nothing,
             maxRetries = 3,
             fifoConfig = Nothing,
@@ -110,6 +125,7 @@ mkReadWithPollSpec = describe "mkReadWithPoll" $ do
             visibilityTimeout = 60,
             batchSize = 10,
             polling = defaultPollingConfig,
+            pollRetry = defaultPollRetryConfig,
             deadLetterConfig = Nothing,
             maxRetries = 3,
             fifoConfig = Nothing,
@@ -154,6 +170,7 @@ mkReadGroupedSpec = describe "mkReadGrouped" $ do
             visibilityTimeout = 60,
             batchSize = 20,
             polling = defaultPollingConfig,
+            pollRetry = defaultPollRetryConfig,
             deadLetterConfig = Nothing,
             maxRetries = 3,
             fifoConfig = Nothing,
@@ -173,6 +190,35 @@ mkReadGroupedSpec = describe "mkReadGrouped" $ do
 
   it "sets qty to batchSize" $ do
     queryQty `shouldBe` 20
+
+pollRetrySpec :: Spec
+pollRetrySpec = describe "pgmqChunks poll retry" $ do
+  it "retries transient poll errors and returns the successful batch" $ do
+    calls <- newIORef (0 :: Int)
+    let cfg = retryTestConfig 5
+    result <-
+      runStubPgmq calls (transientThenSuccess 2) $
+        Stream.toList (Stream.take 1 (pgmqChunks cfg))
+    result `shouldBe` Right [Vector.singleton testMessage]
+    readIORef calls `shouldReturn` 3
+
+  it "does not retry permanent poll errors" $ do
+    calls <- newIORef (0 :: Int)
+    let cfg = retryTestConfig 5
+    result <-
+      runStubPgmq calls (const (Left permanentError)) $
+        Stream.toList (Stream.take 1 (pgmqChunks cfg))
+    result `shouldBe` Left permanentError
+    readIORef calls `shouldReturn` 1
+
+  it "stops retrying after maxAttempts is exhausted" $ do
+    calls <- newIORef (0 :: Int)
+    let cfg = retryTestConfig 2
+    result <-
+      runStubPgmq calls (const (Left transientError)) $
+        Stream.toList (Stream.take 1 (pgmqChunks cfg))
+    result `shouldBe` Left transientError
+    readIORef calls `shouldReturn` 2
 
 -- | Tests for mergeDlqHeaders, the helper that injects the failing
 -- consumer's trace context onto a DLQ message while preserving the
@@ -253,3 +299,78 @@ mergeDlqHeadersSpec = describe "mergeDlqHeaders" $ do
         KeyMap.lookup "x-shibuya-upstream-tracestate" obj
           `shouldBe` Just (String "vendor=opaque")
       other -> expectationFailure $ "expected merged Object, got " <> show other
+
+retryTestConfig :: Int -> PgmqAdapterConfig
+retryTestConfig attempts =
+  let queueName = case parseQueueName "retry_test" of
+        Right q -> q
+        Left e -> error $ "Unexpected: " <> show e
+   in PgmqAdapterConfig
+        { queueName = queueName,
+          visibilityTimeout = 30,
+          batchSize = 1,
+          polling = StandardPolling {pollInterval = 0},
+          pollRetry =
+            PollRetryConfig
+              { maxAttempts = attempts,
+                initialBackoff = 0,
+                maxBackoff = 0
+              },
+          deadLetterConfig = Nothing,
+          maxRetries = 3,
+          fifoConfig = Nothing,
+          prefetchConfig = Nothing
+        }
+
+runStubPgmq ::
+  IORef Int ->
+  (Int -> Either PgmqRuntimeError (Vector.Vector Message)) ->
+  Eff '[Pgmq, Error PgmqRuntimeError, IOE] a ->
+  IO (Either PgmqRuntimeError a)
+runStubPgmq calls respond action =
+  runEff $
+    runErrorNoCallStack $
+      interpret
+        ( \_ -> \case
+            PgmqEffect.ReadMessage _ -> nextPoll
+            PgmqEffect.ReadWithPoll _ -> nextPoll
+            PgmqEffect.ReadGrouped _ -> nextPoll
+            PgmqEffect.ReadGroupedWithPoll _ -> nextPoll
+            PgmqEffect.ReadGroupedRoundRobin _ -> nextPoll
+            PgmqEffect.ReadGroupedRoundRobinWithPoll _ -> nextPoll
+            _ -> error "unexpected Pgmq operation in retry test"
+        )
+        action
+  where
+    nextPoll = do
+      n <- liftIO $ atomicModifyIORef' calls (\c -> let c' = c + 1 in (c', c'))
+      case respond n of
+        Left err -> throwError err
+        Right batch -> pure batch
+
+transientThenSuccess :: Int -> Int -> Either PgmqRuntimeError (Vector.Vector Message)
+transientThenSuccess failures n
+  | n <= failures = Left transientError
+  | otherwise = Right (Vector.singleton testMessage)
+
+transientError :: PgmqRuntimeError
+transientError = PgmqAcquisitionTimeout
+
+permanentError :: PgmqRuntimeError
+permanentError =
+  PgmqConnectionError (HasqlErrors.AuthenticationConnectionError "bad password")
+
+testMessage :: Message
+testMessage =
+  Message
+    { messageId = MessageId 1,
+      visibilityTime = testTime,
+      enqueuedAt = testTime,
+      lastReadAt = Nothing,
+      readCount = 1,
+      body = MessageBody Null,
+      headers = Nothing
+    }
+
+testTime :: UTCTime
+testTime = UTCTime (fromGregorian 2026 1 1) 0
