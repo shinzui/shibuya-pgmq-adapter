@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.0.0 — 2026-06-15
+
+### Breaking Changes
+
+- `PgmqAdapterConfig` gained a `pollRetry :: PollRetryConfig` field. Callers
+  that construct the config by record literal must add it (or start from a
+  smart constructor / default that includes it).
+- `pgmqAdapter` now requires `Error PgmqRuntimeError :> es` in its effect row
+  so transient poll errors can be caught and retried before being rethrown.
+
+### Bug Fixes
+
+- Transient PGMQ poll errors are retried with bounded exponential backoff
+  before the adapter gives up. The default policy makes five total attempts,
+  starting at 100ms and capping at five seconds. Permanent errors and
+  exhausted retry budgets still surface to shibuya supervision.
+
 ## 0.7.0.0 — 2026-06-05
 
 Paired with `shibuya-core 0.7.0.0`.
