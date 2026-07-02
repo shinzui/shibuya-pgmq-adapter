@@ -312,10 +312,11 @@ _mkConfig queueName =
       batchSize = 1,
       polling = StandardPolling {pollInterval = 0.1}, -- Fast polling for tests
       pollRetry = defaultPollRetryConfig,
+      ackRetry = defaultPollRetryConfig,
       deadLetterConfig = Nothing,
+      haltVisibilityTimeout = Nothing,
       maxRetries = 3,
-      fifoConfig = Nothing,
-      prefetchConfig = Nothing
+      fifoConfig = Nothing
     }
 
 -- | Create config with custom batch size
@@ -327,8 +328,9 @@ _mkConfigWithBatchSize qName bs =
       batchSize = bs,
       polling = StandardPolling {pollInterval = 0.1},
       pollRetry = defaultPollRetryConfig,
+      ackRetry = defaultPollRetryConfig,
       deadLetterConfig = Nothing,
+      haltVisibilityTimeout = Nothing,
       maxRetries = 3,
-      fifoConfig = Nothing,
-      prefetchConfig = Nothing
+      fifoConfig = Nothing
     }

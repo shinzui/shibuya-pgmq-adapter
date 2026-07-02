@@ -8,7 +8,7 @@ This document provides a complete reference for all configuration options in the
 - [PollingConfig](#pollingconfig)
 - [DeadLetterConfig](#deadletterconfig)
 - [FifoConfig](#fifoconfig)
-- [PrefetchConfig](#prefetchconfig)
+- [LookaheadConfig](#lookaheadconfig)
 - [Default Configurations](#default-configurations)
 - [Configuration Examples](#configuration-examples)
 - [Tuning Guidelines](#tuning-guidelines)
@@ -26,7 +26,7 @@ data PgmqAdapterConfig = PgmqAdapterConfig
     deadLetterConfig :: !(Maybe DeadLetterConfig),
     maxRetries :: !Int64,
     fifoConfig :: !(Maybe FifoConfig),
-    prefetchConfig :: !(Maybe PrefetchConfig)
+    lookaheadConfig :: !(Maybe LookaheadConfig)
   }
 ```
 
@@ -41,7 +41,7 @@ data PgmqAdapterConfig = PgmqAdapterConfig
 | `deadLetterConfig` | `Maybe DeadLetterConfig` | `Nothing` | Optional dead-letter queue configuration. |
 | `maxRetries` | `Int64` | 3 | Maximum retries before auto dead-lettering. |
 | `fifoConfig` | `Maybe FifoConfig` | `Nothing` | Optional FIFO ordering configuration. |
-| `prefetchConfig` | `Maybe PrefetchConfig` | `Nothing` | Optional concurrent prefetch configuration. |
+| `lookaheadConfig` | `Maybe LookaheadConfig` | `Nothing` | Optional concurrent lookahead configuration. |
 
 ### queueName
 
@@ -286,12 +286,12 @@ extractPartition headers = do
 
 The partition is available in `ingested.envelope.partition`.
 
-## PrefetchConfig
+## LookaheadConfig
 
-Configures concurrent prefetching to reduce latency.
+Configures concurrent lookaheading to reduce latency.
 
 ```haskell
-data PrefetchConfig = PrefetchConfig
+data LookaheadConfig = LookaheadConfig
   { bufferSize :: !Natural
   }
 ```
@@ -304,13 +304,13 @@ data PrefetchConfig = PrefetchConfig
 
 ### How It Works
 
-Without prefetching:
+Without lookaheading:
 ```
 [Poll] -> [Process batch] -> [Poll] -> [Process batch]
   10ms        100ms            10ms        100ms
 ```
 
-With prefetching:
+With lookaheading:
 ```
 [Poll] ────────────────────────────────►
         [Process batch] [Process batch]
@@ -321,7 +321,7 @@ Uses Streamly's `parBuffered` to poll concurrently while processing.
 
 ### Visibility Timeout Pressure
 
-**Warning**: Prefetched messages have their visibility timeout ticking while buffered.
+**Warning**: Lookaheaded messages have their visibility timeout ticking while buffered.
 
 Calculate safe buffer size:
 ```
@@ -341,12 +341,12 @@ visibilityTimeout should be > 8 seconds (e.g., 30 seconds)
 
 ### When to Enable
 
-Enable prefetching when:
+Enable lookaheading when:
 - Processing latency matters
 - Handler processing time is consistent
 - visibilityTimeout is sufficiently large
 
-Avoid prefetching when:
+Avoid lookaheading when:
 - Handler processing time is highly variable
 - visibilityTimeout is tight
 - Memory is constrained
@@ -365,7 +365,7 @@ defaultConfig name = PgmqAdapterConfig
     deadLetterConfig = Nothing,
     maxRetries = 3,
     fifoConfig = Nothing,
-    prefetchConfig = Nothing
+    lookaheadConfig = Nothing
   }
 ```
 
@@ -376,11 +376,11 @@ defaultPollingConfig :: PollingConfig
 defaultPollingConfig = StandardPolling { pollInterval = 1 }
 ```
 
-### defaultPrefetchConfig
+### defaultLookaheadConfig
 
 ```haskell
-defaultPrefetchConfig :: PrefetchConfig
-defaultPrefetchConfig = PrefetchConfig { bufferSize = 4 }
+defaultLookaheadConfig :: LookaheadConfig
+defaultLookaheadConfig = LookaheadConfig { bufferSize = 4 }
 ```
 
 ## Configuration Examples
@@ -392,7 +392,7 @@ let config = (defaultConfig queueName)
       { batchSize = 100,
         visibilityTimeout = 120,  -- 2 minutes
         polling = StandardPolling { pollInterval = 0.1 },  -- 100ms
-        prefetchConfig = Just PrefetchConfig { bufferSize = 8 }
+        lookaheadConfig = Just LookaheadConfig { bufferSize = 8 }
       }
 ```
 
@@ -405,7 +405,7 @@ let config = (defaultConfig queueName)
         polling = LongPolling { maxPollSeconds = 5, pollIntervalMs = 50 },
         deadLetterConfig = Just $ directDeadLetter dlqName True,
         maxRetries = 3,
-        prefetchConfig = Just defaultPrefetchConfig
+        lookaheadConfig = Just defaultLookaheadConfig
       }
 ```
 
@@ -461,13 +461,13 @@ let config = (defaultConfig queueName)
 | Bursty | LongPolling with short max |
 | High throughput | StandardPolling (10-50ms) |
 
-### Prefetch Buffer
+### Lookahead Buffer
 
 | Processing Time | Recommended Buffer |
 |-----------------|-------------------|
 | < 100ms avg | 8-16 batches |
 | 100-500ms avg | 4-8 batches |
 | > 500ms avg | 2-4 batches |
-| Highly variable | Disable prefetching |
+| Highly variable | Disable lookaheading |
 
 Remember: `bufferSize * batchSize * avgTime < visibilityTimeout`

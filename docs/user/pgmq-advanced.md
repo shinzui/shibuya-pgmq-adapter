@@ -1,6 +1,6 @@
 # PGMQ Adapter: Advanced Configuration
 
-This guide covers FIFO ordering, concurrent prefetching, lease extension, and tuning.
+This guide covers FIFO ordering, concurrent lookaheading, lease extension, and tuning.
 
 ## FIFO Ordering
 
@@ -44,15 +44,15 @@ Batch 3:    [A:3, C:3, C:4]
 
 Best for: multi-tenant systems, load balancing - when fairness across groups matters.
 
-## Concurrent Prefetching
+## Concurrent Lookaheading
 
-Prefetching polls the next batch while the current one is being processed, reducing latency.
+Lookaheading polls the next batch while the current one is being processed, reducing latency.
 
-### Enabling Prefetch
+### Enabling Lookahead
 
 ```haskell
 let config = (defaultConfig queueName)
-      { prefetchConfig = Just defaultPrefetchConfig,  -- bufferSize = 4
+      { lookaheadConfig = Just defaultLookaheadConfig,  -- bufferSize = 4
         batchSize = 10
       }
 ```
@@ -61,19 +61,19 @@ let config = (defaultConfig queueName)
 
 ```haskell
 let config = (defaultConfig queueName)
-      { prefetchConfig = Just PrefetchConfig { bufferSize = 8 }
+      { lookaheadConfig = Just LookaheadConfig { bufferSize = 8 }
       }
 ```
 
 ### How It Works
 
-Without prefetching:
+Without lookaheading:
 ```
 [Poll] -> [Process batch] -> [Poll] -> [Process batch]
   10ms        100ms            10ms        100ms
 ```
 
-With prefetching:
+With lookaheading:
 ```
 [Poll] ────────────────────────────────►
         [Process batch] [Process batch]
@@ -82,7 +82,7 @@ With prefetching:
 
 ### Visibility Timeout Safety
 
-Prefetched messages have their visibility timeout ticking while buffered. Ensure:
+Lookaheaded messages have their visibility timeout ticking while buffered. Ensure:
 
 ```
 bufferSize * batchSize * avgProcessingTime < visibilityTimeout
@@ -160,14 +160,14 @@ The PGMQ adapter always provides a lease. Extending the lease calls `changeVisib
 | Bursty | LongPolling with short max |
 | High throughput | StandardPolling (10-50ms) |
 
-### Prefetch Buffer
+### Lookahead Buffer
 
 | Processing Time | Recommended Buffer |
 |-----------------|-------------------|
 | < 100ms avg | 8-16 batches |
 | 100-500ms avg | 4-8 batches |
 | > 500ms avg | 2-4 batches |
-| Highly variable | Disable prefetching |
+| Highly variable | Disable lookaheading |
 
 Remember: `bufferSize * batchSize * avgTime < visibilityTimeout`
 
@@ -180,7 +180,7 @@ let config = (defaultConfig queueName)
       { batchSize = 100,
         visibilityTimeout = 120,  -- 2 minutes
         polling = StandardPolling { pollInterval = 0.1 },  -- 100ms
-        prefetchConfig = Just PrefetchConfig { bufferSize = 8 }
+        lookaheadConfig = Just LookaheadConfig { bufferSize = 8 }
       }
 ```
 

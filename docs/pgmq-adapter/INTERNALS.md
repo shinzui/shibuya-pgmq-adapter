@@ -64,7 +64,7 @@ pgmqAdapter ::
 **Implementation details**:
 
 1. Creates a shutdown TVar for graceful termination
-2. Selects stream source based on prefetch configuration
+2. Selects stream source based on lookahead configuration
 3. Wraps source with shutdown checking
 4. Returns Adapter record
 
@@ -73,13 +73,13 @@ pgmqAdapter config = do
   -- Shutdown signal: TVar Bool, starts False
   shutdownVar <- liftIO $ newTVarIO False
 
-  -- Select source based on prefetch config
-  let messageSource = case config.prefetchConfig of
+  -- Select source based on lookahead config
+  let messageSource = case config.lookaheadConfig of
         Nothing ->
           pgmqSource config  -- Sequential polling
-        Just prefetch ->
-          let prefetchSettings = StreamP.maxBuffer (fromIntegral prefetch.bufferSize)
-           in pgmqSourceWithPrefetch prefetchSettings config  -- Concurrent
+        Just lookahead ->
+          let lookaheadSettings = StreamP.maxBuffer (fromIntegral lookahead.bufferSize)
+           in pgmqSourceWithLookahead lookaheadSettings config  -- Concurrent
 
   pure Adapter
     { adapterName = "pgmq:" <> queueNameToText config.queueName,
@@ -128,7 +128,7 @@ data FifoConfig = FifoConfig { ... }
 data FifoReadStrategy = ThroughputOptimized | RoundRobin
   deriving stock (Show, Eq, Generic)
 
-data PrefetchConfig = PrefetchConfig { ... }
+data LookaheadConfig = LookaheadConfig { ... }
   deriving stock (Show, Eq, Generic)
 ```
 
@@ -474,17 +474,17 @@ nominalToSeconds = ceiling . nominalDiffTimeToSeconds
 
 Uses `ceiling` to round up. A 1.1 second delay becomes 2 seconds in pgmq.
 
-### Prefetch Variants
+### Lookahead Variants
 
 ```haskell
-pgmqChunksPrefetch ::
+pgmqChunksLookahead ::
   (Pgmq :> es, IOE :> es) =>
   (StreamP.Config -> StreamP.Config) ->
   PgmqAdapterConfig ->
   Stream (Eff es) (Vector Pgmq.Message)
-pgmqChunksPrefetch prefetchConfig config =
+pgmqChunksLookahead lookaheadConfig config =
   pgmqChunks config
-    & StreamP.parBuffered prefetchConfig
+    & StreamP.parBuffered lookaheadConfig
 ```
 
 `parBuffered` runs the upstream concurrently, buffering results.
@@ -557,7 +557,7 @@ After the optimization, all messages in each batch are processed:
 
 Memory usage scales with:
 - `batchSize` - size of each Vector
-- `bufferSize` (prefetch) - number of buffered Vectors
+- `bufferSize` (lookahead) - number of buffered Vectors
 - Shibuya inbox size - messages waiting for handler
 
 Worst-case buffered messages: `batchSize * bufferSize + inboxSize`
@@ -598,7 +598,7 @@ Not currently implemented but recommended:
 2. Visibility timeout behavior
 3. DLQ flow
 4. FIFO ordering verification
-5. Prefetch latency measurement
+5. Lookahead latency measurement
 6. Graceful shutdown with in-flight messages
 
 Would require PostgreSQL with pgmq extension (testcontainers recommended).

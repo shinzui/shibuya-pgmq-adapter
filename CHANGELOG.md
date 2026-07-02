@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.9.0.0 — 2026-07-02
+
+### Breaking Changes
+
+- `pgmqAdapter` now takes `PgmqAdapterEnv` and returns `Either PgmqConfigError (Adapter es Value)`, so callers pass the hasql pool explicitly and handle typed configuration validation failures.
+- `PgmqAdapterConfig` gained `ackRetry` and `haltVisibilityTimeout`, and removed the known-deadlocking concurrent lookahead configuration.
+
+### Fixed
+
+- `AckDeadLetter` with a DLQ target now sends the DLQ message and deletes the source row in one PostgreSQL transaction.
+- Finalizers are phase-tracked per message, so repeated successful `finalize` calls are no-ops and do not duplicate DLQ rows or re-run deletes.
+- Ack paths and lease extension use the bounded transient retry policy.
+- `AckHalt` uses `haltVisibilityTimeout` when configured, falling back to `visibilityTimeout`.
+- Lease extension uses absolute pgmq visibility deadlines and never shortens the adapter's tracked lease deadline.
+- DLQ trace-header merging leniently decodes non-UTF8 bytes instead of throwing from the finalizer.
+
+### Tests
+
+- Added validation, finalizer idempotency, halt visibility, and non-UTF8 header regression coverage.
+
 ## 0.8.0.0 — 2026-06-15
 
 ### Breaking Changes

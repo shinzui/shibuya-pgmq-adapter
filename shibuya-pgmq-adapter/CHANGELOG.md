@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.0.0 — 2026-07-02
+
+### Breaking Changes
+
+- `pgmqAdapter` now takes `PgmqAdapterEnv` and returns `Either PgmqConfigError (Adapter es Value)`.
+- `PgmqAdapterConfig` gained `ackRetry` and `haltVisibilityTimeout`, and removed the known-deadlocking concurrent lookahead configuration.
+
+### Reliability
+
+- DLQ send and source delete now run in one PostgreSQL transaction.
+- Message finalizers are idempotent after success.
+- Ack operations and lease extension use bounded transient retry.
+- `AckHalt` uses a configured visibility timeout instead of a hardcoded hour.
+- Lease extension uses absolute visibility deadlines so later extension calls do not shorten the tracked lease.
+- Trace header merging on the DLQ path tolerates non-UTF8 bytes.
+
 ## 0.8.0.0 — 2026-06-15
 
 ### Breaking Changes

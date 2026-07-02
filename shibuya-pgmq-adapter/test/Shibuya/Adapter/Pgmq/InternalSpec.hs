@@ -4,6 +4,7 @@ module Shibuya.Adapter.Pgmq.InternalSpec (spec) where
 
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int32)
 import Data.Time (NominalDiffTime, UTCTime (..), fromGregorian)
@@ -89,10 +90,11 @@ mkReadMessageSpec = describe "mkReadMessage" $ do
             batchSize = 10,
             polling = defaultPollingConfig,
             pollRetry = defaultPollRetryConfig,
+            ackRetry = defaultPollRetryConfig,
             deadLetterConfig = Nothing,
+            haltVisibilityTimeout = Nothing,
             maxRetries = 3,
-            fifoConfig = Nothing,
-            prefetchConfig = Nothing
+            fifoConfig = Nothing
           }
       ReadMessage
         { queueName = queryQueueName,
@@ -126,10 +128,11 @@ mkReadWithPollSpec = describe "mkReadWithPoll" $ do
             batchSize = 10,
             polling = defaultPollingConfig,
             pollRetry = defaultPollRetryConfig,
+            ackRetry = defaultPollRetryConfig,
             deadLetterConfig = Nothing,
+            haltVisibilityTimeout = Nothing,
             maxRetries = 3,
-            fifoConfig = Nothing,
-            prefetchConfig = Nothing
+            fifoConfig = Nothing
           }
       ReadWithPollMessage
         { queueName = queryQueueName,
@@ -171,10 +174,11 @@ mkReadGroupedSpec = describe "mkReadGrouped" $ do
             batchSize = 20,
             polling = defaultPollingConfig,
             pollRetry = defaultPollRetryConfig,
+            ackRetry = defaultPollRetryConfig,
             deadLetterConfig = Nothing,
+            haltVisibilityTimeout = Nothing,
             maxRetries = 3,
-            fifoConfig = Nothing,
-            prefetchConfig = Nothing
+            fifoConfig = Nothing
           }
       ReadGrouped
         { queueName = queryQueueName,
@@ -300,6 +304,12 @@ mergeDlqHeadersSpec = describe "mergeDlqHeaders" $ do
           `shouldBe` Just (String "vendor=opaque")
       other -> expectationFailure $ "expected merged Object, got " <> show other
 
+  it "leniently decodes non-UTF8 trace headers" $ do
+    let consumerHdrs = Just [(BS.pack [0xff, 0xfe], BS.pack [0xff])]
+    mergeDlqHeaders consumerHdrs Nothing `shouldSatisfy` \case
+      Just (Object obj) -> not (KeyMap.null obj)
+      _ -> False
+
 retryTestConfig :: Int -> PgmqAdapterConfig
 retryTestConfig attempts =
   let queueName = case parseQueueName "retry_test" of
@@ -316,10 +326,11 @@ retryTestConfig attempts =
                 initialBackoff = 0,
                 maxBackoff = 0
               },
+          ackRetry = defaultPollRetryConfig,
           deadLetterConfig = Nothing,
+          haltVisibilityTimeout = Nothing,
           maxRetries = 3,
-          fifoConfig = Nothing,
-          prefetchConfig = Nothing
+          fifoConfig = Nothing
         }
 
 runStubPgmq ::

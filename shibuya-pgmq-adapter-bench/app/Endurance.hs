@@ -44,6 +44,7 @@ import Pgmq.Migration qualified as Migration
 import Pgmq.Types (MessageBody (..), QueueName, parseQueueName)
 import Shibuya.Adapter.Pgmq
   ( defaultConfig,
+    mkPgmqAdapterEnv,
     pgmqAdapter,
   )
 import Shibuya.App
@@ -323,8 +324,12 @@ runEnduranceTest config pool queueName = do
     samplerAsync <- async $ runSampler config startTime producedVar processedRef failedRef csvHandle
 
     let adapterConfig = defaultConfig queueName
+        adapterEnv = mkPgmqAdapterEnv pool
     eResult <- runEff $ runErrorNoCallStack @PgmqRuntimeError $ runPgmq pool $ runTracingNoop $ do
-      adapter <- pgmqAdapter adapterConfig
+      adapterResult <- pgmqAdapter adapterEnv adapterConfig
+      adapter <- case adapterResult of
+        Left err -> liftIO $ error $ "Invalid PGMQ adapter config: " <> show err
+        Right adapter -> pure adapter
       let handler = makeHandler processedRef failedRef
           processor = mkProcessor adapter handler
 

@@ -2,6 +2,10 @@
 module Shibuya.Adapter.Pgmq.Config
   ( -- * Main Configuration
     PgmqAdapterConfig (..),
+    PgmqAdapterEnv (..),
+    mkPgmqAdapterEnv,
+    PgmqConfigError (..),
+    validateConfig,
 
     -- * Polling Configuration
     PollingConfig (..),
@@ -19,94 +23,152 @@ module Shibuya.Adapter.Pgmq.Config
     FifoConfig (..),
     FifoReadStrategy (..),
 
-    -- * Prefetch Configuration
-    PrefetchConfig (..),
-
     -- * Defaults
     defaultConfig,
     defaultPollingConfig,
     defaultPollRetryConfig,
-    defaultPrefetchConfig,
   )
 where
 
 import Data.Int (Int32, Int64)
 import Data.Time (NominalDiffTime)
 import GHC.Generics (Generic)
-import Numeric.Natural (Natural)
+import Hasql.Pool qualified as Pool
+import Pgmq.Effectful (PgmqRuntimeError)
 import Pgmq.Types (QueueName, RoutingKey)
+import Pgmq.Types qualified as Pgmq
+
+-- | Runtime resources and callbacks used by the adapter.
+data PgmqAdapterEnv = PgmqAdapterEnv
+  { -- | Connection pool used for operations that need one transaction.
+    pool :: !Pool.Pool,
+    -- | Called when the source stream dead-letters an over-retried message.
+    onAutoDeadLetter :: Pgmq.Message -> IO (),
+    -- | Called when an ack path fails after retry or fails permanently.
+    onAckFailure :: Pgmq.Message -> PgmqRuntimeError -> IO ()
+  }
+
+-- | Build an adapter environment with no-op callbacks.
+mkPgmqAdapterEnv :: Pool.Pool -> PgmqAdapterEnv
+mkPgmqAdapterEnv pool =
+  PgmqAdapterEnv
+    { pool = pool,
+      onAutoDeadLetter = const (pure ()),
+      onAckFailure = \_ _ -> pure ()
+    }
 
 -- | Configuration for the PGMQ adapter.
 data PgmqAdapterConfig = PgmqAdapterConfig
-  { -- | Name of the queue to consume from
+  { -- | Name of the queue to consume from.
     queueName :: !QueueName,
-    -- | Visibility timeout in seconds (default: 30)
-    -- Messages become invisible for this duration after being read
+    -- | Visibility timeout in seconds. Messages become invisible for this duration after being read.
     visibilityTimeout :: !Int32,
-    -- | Maximum number of messages to read per poll (default: 1)
+    -- | Maximum number of messages to read per poll.
     batchSize :: !Int32,
-    -- | Polling configuration
+    -- | Polling configuration.
     polling :: !PollingConfig,
-    -- | Retry policy for transient errors during queue polling
+    -- | Retry policy for transient errors during queue polling.
     pollRetry :: !PollRetryConfig,
-    -- | Optional dead-letter queue configuration
+    -- | Retry policy for transient errors during acknowledgement operations.
+    ackRetry :: !PollRetryConfig,
+    -- | Optional dead-letter queue configuration.
     deadLetterConfig :: !(Maybe DeadLetterConfig),
-    -- | Maximum retries before dead-lettering (default: 3)
-    -- Based on pgmq's readCount field
+    -- | Optional visibility timeout used for 'AckHalt'. Falls back to 'visibilityTimeout'.
+    haltVisibilityTimeout :: !(Maybe Int32),
+    -- | Maximum deliveries before dead-lettering.
+    --
+    -- This is based on pgmq's readCount field, which counts deliveries, not
+    -- handler failures. A value of 0 is valid and auto-dead-letters every
+    -- message before processing.
     maxRetries :: !Int64,
-    -- | Optional FIFO mode configuration
-    fifoConfig :: !(Maybe FifoConfig),
-    -- | Optional concurrent prefetch configuration
-    -- When enabled, polls ahead while processing current messages
-    prefetchConfig :: !(Maybe PrefetchConfig)
+    -- | Optional FIFO mode configuration.
+    fifoConfig :: !(Maybe FifoConfig)
   }
   deriving stock (Show, Eq, Generic)
 
--- | Retry policy for transient database errors during queue polling.
+-- | Typed configuration validation errors.
+data PgmqConfigError
+  = InvalidBatchSize !Int32
+  | InvalidVisibilityTimeout !Int32
+  | InvalidStandardPollInterval !NominalDiffTime
+  | InvalidLongPollSeconds !Int32
+  | InvalidLongPollIntervalMs !Int32
+  | InvalidMaxRetries !Int64
+  | InvalidHaltVisibilityTimeout !Int32
+  | InvalidPollRetryMaxAttempts !Int
+  | InvalidPollRetryBackoff !NominalDiffTime !NominalDiffTime
+  | InvalidAckRetryMaxAttempts !Int
+  | InvalidAckRetryBackoff !NominalDiffTime !NominalDiffTime
+  deriving stock (Show, Eq, Generic)
+
+-- | Validate adapter configuration before starting a source stream.
+validateConfig :: PgmqAdapterConfig -> Either PgmqConfigError PgmqAdapterConfig
+validateConfig config
+  | config.batchSize < 1 = Left (InvalidBatchSize config.batchSize)
+  | config.visibilityTimeout < 1 = Left (InvalidVisibilityTimeout config.visibilityTimeout)
+  | Just halt <- config.haltVisibilityTimeout, halt < 1 = Left (InvalidHaltVisibilityTimeout halt)
+  | config.maxRetries < 0 = Left (InvalidMaxRetries config.maxRetries)
+  | otherwise = do
+      validatePolling config.polling
+      validateRetry InvalidPollRetryMaxAttempts InvalidPollRetryBackoff config.pollRetry
+      validateRetry InvalidAckRetryMaxAttempts InvalidAckRetryBackoff config.ackRetry
+      pure config
+  where
+    validatePolling = \case
+      StandardPolling interval
+        | interval <= 0 -> Left (InvalidStandardPollInterval interval)
+        | otherwise -> Right ()
+      LongPolling maxPollSeconds pollIntervalMs
+        | maxPollSeconds < 1 -> Left (InvalidLongPollSeconds maxPollSeconds)
+        | pollIntervalMs < 1 -> Left (InvalidLongPollIntervalMs pollIntervalMs)
+        | otherwise -> Right ()
+
+    validateRetry maxAttemptsErr backoffErr retry
+      | retry.maxAttempts < 1 = Left (maxAttemptsErr retry.maxAttempts)
+      | retry.initialBackoff < 0 || retry.maxBackoff < 0 =
+          Left (backoffErr retry.initialBackoff retry.maxBackoff)
+      | otherwise = Right ()
+
+-- | Retry policy for transient database errors.
 data PollRetryConfig = PollRetryConfig
-  { -- | Total attempts per poll, including the first attempt
+  { -- | Total attempts, including the first attempt.
     maxAttempts :: !Int,
-    -- | Delay before the first retry
+    -- | Delay before the first retry.
     initialBackoff :: !NominalDiffTime,
-    -- | Maximum delay between retry attempts
+    -- | Maximum delay between retry attempts.
     maxBackoff :: !NominalDiffTime
   }
   deriving stock (Show, Eq, Generic)
 
 -- | Polling strategy for reading messages.
 data PollingConfig
-  = -- | Standard polling with sleep between reads when queue is empty
+  = -- | Standard polling with sleep between reads when queue is empty.
     StandardPolling
-      { -- | Interval between polls when no messages are available
+      { -- | Interval between polls when no messages are available.
         pollInterval :: !NominalDiffTime
       }
-  | -- | Long polling - blocks in database until messages available
-    -- More efficient when queue is often empty
+  | -- | Long polling blocks in PostgreSQL until messages are available or the wait expires.
     LongPolling
-      { -- | Maximum seconds to wait for messages (e.g., 10)
+      { -- | Maximum seconds to wait for messages.
         maxPollSeconds :: !Int32,
-        -- | Interval between database checks in milliseconds (e.g., 100)
+        -- | Interval between database checks in milliseconds.
         pollIntervalMs :: !Int32
       }
   deriving stock (Show, Eq, Generic)
 
 -- | Target for dead-lettered messages.
 data DeadLetterTarget
-  = -- | Send directly to a specific queue
+  = -- | Send directly to a specific queue.
     DirectQueue !QueueName
-  | -- | Route via topic pattern matching (pgmq 1.11.0+).
-    -- Messages are sent using @pgmq.send_topic@ with the given routing key,
-    -- allowing fan-out to multiple DLQ consumers based on their topic bindings.
+  | -- | Route via topic pattern matching.
     TopicRoute !RoutingKey
   deriving stock (Show, Eq, Generic)
 
 -- | Configuration for dead-letter queue handling.
--- When a message exceeds maxRetries or receives AckDeadLetter,
--- it will be sent to the configured target.
 data DeadLetterConfig = DeadLetterConfig
-  { -- | Where to send dead-lettered messages
+  { -- | Where to send dead-lettered messages.
     dlqTarget :: !DeadLetterTarget,
-    -- | Whether to include original message metadata in DLQ message
+    -- | Whether to include original message metadata in DLQ message.
     includeMetadata :: !Bool
   }
   deriving stock (Show, Eq, Generic)
@@ -119,9 +181,7 @@ directDeadLetter queueName metadata =
       includeMetadata = metadata
     }
 
--- | Create a dead-letter config using topic-based routing (pgmq 1.11.0+).
--- Messages are sent via @pgmq.send_topic@ and delivered to all queues
--- whose topic bindings match the routing key.
+-- | Create a dead-letter config using topic-based routing.
 topicDeadLetter :: RoutingKey -> Bool -> DeadLetterConfig
 topicDeadLetter routingKey metadata =
   DeadLetterConfig
@@ -130,41 +190,25 @@ topicDeadLetter routingKey metadata =
     }
 
 -- | FIFO queue configuration for ordered message processing.
--- Requires pgmq 1.8.0+ with FIFO indexes.
 data FifoConfig = FifoConfig
-  { -- | Strategy for reading messages from FIFO queue
+  { -- | Strategy for reading messages from FIFO queue.
     readStrategy :: !FifoReadStrategy
   }
   deriving stock (Show, Eq, Generic)
 
 -- | Strategy for reading messages from FIFO queues.
 data FifoReadStrategy
-  = -- | Fill batch from same message group first (SQS-like behavior)
-    -- Good for: order processing, document workflows
+  = -- | Fill batch from same message group first.
     ThroughputOptimized
-  | -- | Fair round-robin distribution across message groups
-    -- Good for: multi-tenant systems, load balancing
+  | -- | Fair round-robin distribution across groups.
     RoundRobin
-  deriving stock (Show, Eq, Generic)
-
--- | Configuration for concurrent prefetching.
--- When enabled, polls the next batch while current messages are being processed.
---
--- Trade-off: Lower latency at the cost of visibility timeout pressure.
--- Prefetched messages have their visibility timeout ticking, so ensure:
--- @bufferSize * batchSize * avgProcessingTime < visibilityTimeout@
-data PrefetchConfig = PrefetchConfig
-  { -- | Number of batches to buffer ahead of consumption (default: 4)
-    -- Higher values reduce latency but increase visibility timeout pressure
-    bufferSize :: !Natural
-  }
   deriving stock (Show, Eq, Generic)
 
 -- | Default polling configuration using standard polling with 1 second interval.
 defaultPollingConfig :: PollingConfig
 defaultPollingConfig = StandardPolling {pollInterval = 1}
 
--- | Default retry policy for transient poll errors.
+-- | Default retry policy for transient database errors.
 defaultPollRetryConfig :: PollRetryConfig
 defaultPollRetryConfig =
   PollRetryConfig
@@ -173,23 +217,7 @@ defaultPollRetryConfig =
       maxBackoff = 5
     }
 
--- | Default prefetch configuration.
--- Buffers 4 batches ahead, balancing latency with visibility timeout safety.
-defaultPrefetchConfig :: PrefetchConfig
-defaultPrefetchConfig = PrefetchConfig {bufferSize = 4}
-
 -- | Default adapter configuration.
--- Note: You must set 'queueName' before using.
---
--- @
--- let config = defaultConfig { queueName = myQueueName }
--- @
---
--- To enable prefetching:
---
--- @
--- let config = (defaultConfig myQueueName) { prefetchConfig = Just defaultPrefetchConfig }
--- @
 defaultConfig :: QueueName -> PgmqAdapterConfig
 defaultConfig name =
   PgmqAdapterConfig
@@ -198,8 +226,9 @@ defaultConfig name =
       batchSize = 1,
       polling = defaultPollingConfig,
       pollRetry = defaultPollRetryConfig,
+      ackRetry = defaultPollRetryConfig,
       deadLetterConfig = Nothing,
+      haltVisibilityTimeout = Nothing,
       maxRetries = 3,
-      fifoConfig = Nothing,
-      prefetchConfig = Nothing -- Disabled by default
+      fifoConfig = Nothing
     }

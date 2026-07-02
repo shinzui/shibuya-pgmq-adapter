@@ -21,7 +21,7 @@ The pgmq adapter creates a Shibuya `Adapter` that:
 4. **Provides lease extension** for long-running handlers
 5. **Handles automatic dead-lettering** when retry limits are exceeded
 6. **Supports FIFO ordering** via pgmq's grouped read operations
-7. **Enables concurrent prefetching** to minimize processing latency
+7. **Enables concurrent lookaheading** to minimize processing latency
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -138,11 +138,11 @@ let config = (defaultConfig queueName)
       }
 ```
 
-### With Concurrent Prefetching
+### With Concurrent Lookaheading
 
 ```haskell
 let config = (defaultConfig queueName)
-      { prefetchConfig = Just defaultPrefetchConfig,
+      { lookaheadConfig = Just defaultLookaheadConfig,
         batchSize = 10
       }
 ```
@@ -158,7 +158,7 @@ let config = (defaultConfig queueName)
 | **Automatic Retry** | Uses pgmq's `readCount` to track and limit retries |
 | **Dead-Letter Queue** | Optional DLQ with configurable metadata inclusion |
 | **FIFO Ordering** | Grouped message processing with pgmq 1.8.0+ |
-| **Concurrent Prefetch** | Polls next batch while processing current messages |
+| **Concurrent Lookahead** | Polls next batch while processing current messages |
 | **Graceful Shutdown** | Stops polling while allowing in-flight messages to complete |
 
 ## Requirements

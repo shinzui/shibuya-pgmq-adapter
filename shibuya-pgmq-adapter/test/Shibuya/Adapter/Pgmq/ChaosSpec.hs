@@ -25,13 +25,16 @@ import Pgmq.Effectful qualified as PgmqEff
 import Pgmq.Hasql.Sessions qualified as Sessions
 import Pgmq.Hasql.Statements.Types (ReadMessage (..), SendMessage (..), SendMessageWithHeaders (..))
 import Pgmq.Types (MessageBody (..), MessageHeaders (..))
+import Shibuya.Adapter (Adapter)
 import Shibuya.Adapter.Pgmq
   ( PgmqAdapterConfig (..),
     PollingConfig (..),
     defaultConfig,
     directDeadLetter,
+    mkPgmqAdapterEnv,
     pgmqAdapter,
   )
+import Shibuya.Adapter.Pgmq.Internal (mkIngested)
 import Shibuya.App
   ( ShutdownConfig (..),
     SupervisionStrategy (..),
@@ -39,10 +42,12 @@ import Shibuya.App
     runApp,
     stopAppGracefully,
   )
-import Shibuya.Core.Ack (AckDecision (..), DeadLetterReason (..))
+import Shibuya.Core.Ack (AckDecision (..), DeadLetterReason (..), HaltReason (..))
+import Shibuya.Core.AckHandle (AckHandle (..))
+import Shibuya.Core.Ingested (Ingested (..))
 import Shibuya.Handler (Handler)
 import Shibuya.Runner.Metrics (ProcessorId (..))
-import Shibuya.Telemetry.Effect (runTracingNoop)
+import Shibuya.Telemetry.Effect (Tracing, runTracingNoop)
 import System.Environment (lookupEnv)
 import Test.Hspec
 import TmpPostgres (TestFixture (..), runPgmqSession, withPgmqDb, withTestFixture)
@@ -153,7 +158,7 @@ poisonMessageSpec = describe "Poison messages" $ do
 
     -- Run processor that dead-letters the message
     runAdapterIO pool $ runTracingNoop $ do
-      adapter <- pgmqAdapter config
+      adapter <- requireAdapter pool config
       let handler = deadLetterHandler processedRef
           processor = mkProcessor adapter handler
 
@@ -223,7 +228,7 @@ poisonMessageSpec = describe "Poison messages" $ do
 
     -- Run processor that dead-letters the message
     runAdapterIO pool $ runTracingNoop $ do
-      adapter <- pgmqAdapter config
+      adapter <- requireAdapter pool config
       let handler = deadLetterHandler processedRef
           processor = mkProcessor adapter handler
 
@@ -265,6 +270,155 @@ poisonMessageSpec = describe "Poison messages" $ do
           _ -> expectationFailure "tracestate header should be a string"
       Just _ -> expectationFailure "DLQ message headers should be an object"
 
+  it "AckDeadLetter is idempotent after a successful finalize" $ \TestFixture {pool, queueName, dlqName} -> do
+    runPgmqSession pool $ do
+      _ <-
+        Sessions.sendMessage $
+          SendMessage
+            { queueName = queueName,
+              messageBody = MessageBody (String "idempotent-dlq"),
+              delay = Just 0
+            }
+      pure ()
+
+    let config =
+          (defaultConfig queueName)
+            { visibilityTimeout = 5,
+              batchSize = 1,
+              polling = StandardPolling {pollInterval = 0.1},
+              deadLetterConfig = Just $ directDeadLetter dlqName True
+            }
+
+    runAdapterIO pool $ runTracingNoop $ do
+      msgs <-
+        PgmqEff.readMessage $
+          ReadMessage
+            { queueName = queueName,
+              delay = 30,
+              batchSize = Just 1,
+              conditional = Nothing
+            }
+      case Vector.uncons msgs of
+        Nothing -> liftIO $ expectationFailure "expected one source message"
+        Just (msg, _) -> do
+          ingestedResult <- mkIngested (mkPgmqAdapterEnv pool) config msg
+          case ingestedResult of
+            Nothing -> liftIO $ expectationFailure "message should not auto-DLQ"
+            Just Ingested {ack = AckHandle finalize} -> do
+              finalize (AckDeadLetter (PoisonPill "first"))
+              finalize (AckDeadLetter (PoisonPill "second"))
+
+    dlqMsgs <-
+      runPgmqSession pool $
+        Sessions.readMessage $
+          ReadMessage
+            { queueName = dlqName,
+              delay = 30,
+              batchSize = Just 10,
+              conditional = Nothing
+            }
+    Vector.length dlqMsgs `shouldBe` 1
+
+    sourceMsgs <-
+      runPgmqSession pool $
+        Sessions.readMessage $
+          ReadMessage
+            { queueName = queueName,
+              delay = 30,
+              batchSize = Just 10,
+              conditional = Nothing
+            }
+    Vector.length sourceMsgs `shouldBe` 0
+
+  it "AckOk is idempotent after a successful finalize" $ \TestFixture {pool, queueName, dlqName = _} -> do
+    runPgmqSession pool $ do
+      _ <-
+        Sessions.sendMessage $
+          SendMessage
+            { queueName = queueName,
+              messageBody = MessageBody (String "idempotent-ok"),
+              delay = Just 0
+            }
+      pure ()
+
+    let config = (defaultConfig queueName) {visibilityTimeout = 5, batchSize = 1}
+
+    runAdapterIO pool $ runTracingNoop $ do
+      msgs <-
+        PgmqEff.readMessage $
+          ReadMessage
+            { queueName = queueName,
+              delay = 30,
+              batchSize = Just 1,
+              conditional = Nothing
+            }
+      case Vector.uncons msgs of
+        Nothing -> liftIO $ expectationFailure "expected one source message"
+        Just (msg, _) -> do
+          ingestedResult <- mkIngested (mkPgmqAdapterEnv pool) config msg
+          case ingestedResult of
+            Nothing -> liftIO $ expectationFailure "message should not auto-DLQ"
+            Just Ingested {ack = AckHandle finalize} -> do
+              finalize AckOk
+              finalize AckOk
+
+    sourceMsgs <-
+      runPgmqSession pool $
+        Sessions.readMessage $
+          ReadMessage
+            { queueName = queueName,
+              delay = 30,
+              batchSize = Just 10,
+              conditional = Nothing
+            }
+    Vector.length sourceMsgs `shouldBe` 0
+
+  it "AckHalt uses haltVisibilityTimeout when configured" $ \TestFixture {pool, queueName, dlqName = _} -> do
+    runPgmqSession pool $ do
+      _ <-
+        Sessions.sendMessage $
+          SendMessage
+            { queueName = queueName,
+              messageBody = MessageBody (String "halt-vt"),
+              delay = Just 0
+            }
+      pure ()
+
+    let config =
+          (defaultConfig queueName)
+            { visibilityTimeout = 30,
+              haltVisibilityTimeout = Just 1
+            }
+
+    runAdapterIO pool $ runTracingNoop $ do
+      msgs <-
+        PgmqEff.readMessage $
+          ReadMessage
+            { queueName = queueName,
+              delay = 30,
+              batchSize = Just 1,
+              conditional = Nothing
+            }
+      case Vector.uncons msgs of
+        Nothing -> liftIO $ expectationFailure "expected one source message"
+        Just (msg, _) -> do
+          ingestedResult <- mkIngested (mkPgmqAdapterEnv pool) config msg
+          case ingestedResult of
+            Nothing -> liftIO $ expectationFailure "message should not auto-DLQ"
+            Just Ingested {ack = AckHandle finalize} -> finalize (AckHalt (HaltFatal "pause"))
+
+    threadDelay 1500000
+    visible <-
+      runPgmqSession pool $
+        Sessions.readMessage $
+          ReadMessage
+            { queueName = queueName,
+              delay = 30,
+              batchSize = Just 1,
+              conditional = Nothing
+            }
+    Vector.length visible `shouldBe` 1
+
 --------------------------------------------------------------------------------
 -- Long Handler Tests
 --------------------------------------------------------------------------------
@@ -296,7 +450,7 @@ longHandlerSpec = describe "Long-running handlers" $ do
 
     -- Start processor with slow handler
     processorAsync <- async $ runAdapterIO pool $ runTracingNoop $ do
-      adapter <- pgmqAdapter config
+      adapter <- requireAdapter pool config
       let handler = slowHandler processedRef 2000000 -- 2 second delay
           processor = mkProcessor adapter handler
 
@@ -365,7 +519,7 @@ gracefulShutdownSpec = describe "Graceful shutdown" $ do
 
     -- Run processor with slow handler
     runAdapterIO pool $ runTracingNoop $ do
-      adapter <- pgmqAdapter config
+      adapter <- requireAdapter pool config
       let handler = slowHandler processedRef 50000 -- 0.05 second delay per message
           processor = mkProcessor adapter handler
 
@@ -408,7 +562,7 @@ gracefulShutdownSpec = describe "Graceful shutdown" $ do
             }
 
     runAdapterIO pool $ runTracingNoop $ do
-      adapter <- pgmqAdapter config
+      adapter <- requireAdapter pool config
       let handler = countingHandler processedRef
           processor = mkProcessor adapter handler
 
@@ -490,3 +644,14 @@ waitForProcessed ref target timeoutMicros = go 0
             else do
               threadDelay pollInterval
               go (elapsed + pollInterval)
+
+requireAdapter ::
+  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es, Tracing :> es) =>
+  Pool.Pool ->
+  PgmqAdapterConfig ->
+  Eff es (Adapter es Value)
+requireAdapter pool config = do
+  result <- pgmqAdapter (mkPgmqAdapterEnv pool) config
+  case result of
+    Left err -> liftIO $ error $ "Invalid PGMQ adapter config: " <> show err
+    Right adapter -> pure adapter

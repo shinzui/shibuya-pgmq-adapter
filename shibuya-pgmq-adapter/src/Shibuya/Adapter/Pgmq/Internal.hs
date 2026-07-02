@@ -3,11 +3,9 @@
 module Shibuya.Adapter.Pgmq.Internal
   ( -- * Stream Construction
     pgmqSource,
-    pgmqSourceWithPrefetch,
     pgmqChunks,
-    pgmqChunksPrefetch,
     pgmqMessages,
-    pgmqMessagesPrefetch,
+    releaseMessages,
 
     -- * Ingested Construction
     mkIngested,
@@ -27,28 +25,35 @@ module Shibuya.Adapter.Pgmq.Internal
 
     -- * Utilities
     nominalToSeconds,
+    retryingTransient,
   )
 where
 
 import Control.Concurrent (threadDelay)
-import Control.Monad (when)
+import Control.Monad (void, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Foldable (traverse_)
 import Data.Function ((&))
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Int (Int32)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TE
-import Data.Time (NominalDiffTime, nominalDiffTimeToSeconds)
+import Data.Time (NominalDiffTime, addUTCTime, getCurrentTime, nominalDiffTimeToSeconds)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, catchError, throwError)
-import Pgmq.Effectful (PgmqRuntimeError, isTransient)
+import Hasql.Pool qualified as Pool
+import Hasql.Transaction qualified as Transaction
+import Hasql.Transaction.Sessions qualified as Transaction.Sessions
+import Pgmq.Effectful (PgmqRuntimeError, fromUsageError, isTransient)
 import Pgmq.Effectful.Effect
   ( Pgmq,
     archiveMessage,
+    batchChangeVisibilityTimeout,
     changeVisibilityTimeout,
     deleteMessage,
     readGrouped,
@@ -57,13 +62,12 @@ import Pgmq.Effectful.Effect
     readGroupedWithPoll,
     readMessage,
     readWithPoll,
-    sendMessage,
-    sendMessageWithHeaders,
-    sendTopic,
-    sendTopicWithHeaders,
+    setVisibilityTimeoutAt,
   )
+import Pgmq.Hasql.Statements.Message qualified as Msg
 import Pgmq.Hasql.Statements.Types
-  ( MessageQuery (..),
+  ( BatchVisibilityTimeoutQuery (..),
+    MessageQuery (..),
     ReadGrouped (..),
     ReadGroupedWithPoll (..),
     ReadMessage (..),
@@ -72,6 +76,7 @@ import Pgmq.Hasql.Statements.Types
     SendMessageWithHeaders (..),
     SendTopic (..),
     SendTopicWithHeaders (..),
+    VisibilityTimeoutAtQuery (..),
     VisibilityTimeoutQuery (..),
   )
 import Pgmq.Types qualified as Pgmq
@@ -81,6 +86,7 @@ import Shibuya.Adapter.Pgmq.Config
     FifoConfig (..),
     FifoReadStrategy (..),
     PgmqAdapterConfig (..),
+    PgmqAdapterEnv (..),
     PollRetryConfig (..),
     PollingConfig (..),
   )
@@ -97,7 +103,6 @@ import Shibuya.Telemetry.Effect (Tracing)
 import Shibuya.Telemetry.Propagation (currentTraceHeaders)
 import Streamly.Data.Stream (Stream)
 import Streamly.Data.Stream qualified as Stream
-import Streamly.Data.Stream.Prelude qualified as StreamP
 import Streamly.Data.Unfold qualified as Unfold
 
 -- | Convert 'NominalDiffTime' to seconds as 'Int32', saturating at the
@@ -165,24 +170,29 @@ mkReadGroupedWithPoll config maxSec intervalMs =
 
 -- | Create a Lease for visibility timeout extension.
 mkLease ::
-  (Pgmq :> es) =>
-  Pgmq.QueueName ->
-  Pgmq.MessageId ->
-  Lease es
-mkLease queueName msgId =
-  Lease
-    { leaseId = Text.pack (show (Pgmq.unMessageId msgId)),
-      leaseExtend = \duration -> do
-        let vtSeconds = nominalToSeconds duration
-        _ <-
-          changeVisibilityTimeout $
-            VisibilityTimeoutQuery
-              { queueName = queueName,
-                messageId = msgId,
-                visibilityTimeoutOffset = vtSeconds
-              }
-        pure ()
-    }
+  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es) =>
+  PgmqAdapterConfig ->
+  Pgmq.Message ->
+  Eff es (Lease es)
+mkLease config msg = do
+  lastVtRef <- liftIO $ newIORef msg.visibilityTime
+  pure
+    Lease
+      { leaseId = Text.pack (show (Pgmq.unMessageId msg.messageId)),
+        leaseExtend = \duration -> do
+          now <- liftIO getCurrentTime
+          lastVt <- liftIO $ readIORef lastVtRef
+          let target = max lastVt (addUTCTime duration now)
+          updated <-
+            retryingTransient config.ackRetry $
+              setVisibilityTimeoutAt $
+                VisibilityTimeoutAtQuery
+                  { queueName = config.queueName,
+                    messageId = msg.messageId,
+                    visibilityTime = target
+                  }
+          liftIO $ writeIORef lastVtRef updated.visibilityTime
+      }
 
 -- | Create an AckHandle for a message.
 --
@@ -197,98 +207,125 @@ mkLease queueName msgId =
 -- pre-0.5.0.0 behavior. See plan 1 / Finding F3 in the parent
 -- shibuya repo's plan 9.
 mkAckHandle ::
-  (Pgmq :> es, IOE :> es, Tracing :> es) =>
+  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es, Tracing :> es) =>
+  PgmqAdapterEnv ->
   PgmqAdapterConfig ->
+  IORef Bool ->
   Pgmq.Message ->
   AckHandle es
-mkAckHandle config msg = AckHandle $ \decision -> do
-  let queueName = config.queueName
-      msgId = msg.messageId
-
-  case decision of
-    AckOk ->
-      -- Successfully processed - delete from queue
-      void $ deleteMessage (MessageQuery queueName msgId)
-    AckRetry (RetryDelay delay) -> do
-      -- Retry after delay - extend visibility timeout
-      let vtSeconds = nominalToSeconds delay
-      void $
-        changeVisibilityTimeout $
-          VisibilityTimeoutQuery
-            { queueName = queueName,
-              messageId = msgId,
-              visibilityTimeoutOffset = vtSeconds
-            }
-    AckDeadLetter reason -> do
-      -- Handle dead-lettering
-      case config.deadLetterConfig of
-        Nothing ->
-          -- No DLQ configured - just archive the message
-          void $ archiveMessage (MessageQuery queueName msgId)
-        Just dlqConfig -> do
-          -- Build DLQ headers: pull the consumer's current trace
-          -- context (Nothing if tracing is off or no active span);
-          -- merge with the original message's headers (consumer's
-          -- traceparent wins, original preserved under the
-          -- x-shibuya-upstream-* keys).
-          consumerHdrs <- currentTraceHeaders
-          let dlqBody = mkDlqPayload msg reason dlqConfig.includeMetadata
-              dlqHeaders = mergeDlqHeaders consumerHdrs msg.headers
-          case dlqConfig.dlqTarget of
-            DirectQueue dlqQueueName ->
-              case dlqHeaders of
-                Just headers ->
-                  void $
-                    sendMessageWithHeaders $
-                      SendMessageWithHeaders
-                        { queueName = dlqQueueName,
-                          messageBody = dlqBody,
-                          messageHeaders = Pgmq.MessageHeaders headers,
-                          delay = Nothing
-                        }
-                Nothing ->
-                  void $
-                    sendMessage $
-                      SendMessage
-                        { queueName = dlqQueueName,
-                          messageBody = dlqBody,
-                          delay = Nothing
-                        }
-            TopicRoute routingKey ->
-              case dlqHeaders of
-                Just headers ->
-                  void $
-                    sendTopicWithHeaders $
-                      SendTopicWithHeaders
-                        { routingKey = routingKey,
-                          messageBody = dlqBody,
-                          messageHeaders = Pgmq.MessageHeaders headers,
-                          delay = Nothing
-                        }
-                Nothing ->
-                  void $
-                    sendTopic $
-                      SendTopic
-                        { routingKey = routingKey,
-                          messageBody = dlqBody,
-                          delay = Nothing
-                        }
-          -- Delete from original queue
-          void $ deleteMessage (MessageQuery queueName msgId)
-    AckHalt _reason -> do
-      -- Halt processing - extend VT far into future
-      -- Message becomes visible again after processor restarts
-      let vtSeconds = 3600 :: Int32 -- 1 hour
-      void $
-        changeVisibilityTimeout $
-          VisibilityTimeoutQuery
-            { queueName = queueName,
-              messageId = msgId,
-              visibilityTimeoutOffset = vtSeconds
-            }
+mkAckHandle env config finalizedRef msg = AckHandle $ \decision -> do
+  alreadyFinalized <- liftIO $ readIORef finalizedRef
+  if alreadyFinalized
+    then pure ()
+    else do
+      runDecision decision
+      liftIO $ writeIORef finalizedRef True
   where
-    void :: (Functor f) => f a -> f ()
-    void = fmap (const ())
+    queueName = config.queueName
+    msgId = msg.messageId
+
+    runDecision decision = retryingTransient config.ackRetry $ case decision of
+      AckOk -> do
+        -- Successfully processed - delete from queue
+        void $ deleteMessage (MessageQuery queueName msgId)
+      AckRetry (RetryDelay delay) -> do
+        -- Retry after delay - extend visibility timeout
+        let vtSeconds = nominalToSeconds delay
+        void $
+          changeVisibilityTimeout $
+            VisibilityTimeoutQuery
+              { queueName = queueName,
+                messageId = msgId,
+                visibilityTimeoutOffset = vtSeconds
+              }
+      AckDeadLetter reason -> do
+        -- Handle dead-lettering
+        case config.deadLetterConfig of
+          Nothing ->
+            -- No DLQ configured - just archive the message
+            void $ archiveMessage (MessageQuery queueName msgId)
+          Just dlqConfig -> do
+            consumerHdrs <- currentTraceHeaders
+            deadLetterTransactionally env config dlqConfig msg reason (mergeDlqHeaders consumerHdrs msg.headers)
+      AckHalt _reason -> do
+        -- Park the message by reassigning its visibility timeout. It becomes
+        -- visible to any consumer after this many seconds, independent of restart.
+        let vtSeconds = maybe config.visibilityTimeout id config.haltVisibilityTimeout
+        void $
+          changeVisibilityTimeout $
+            VisibilityTimeoutQuery
+              { queueName = queueName,
+                messageId = msgId,
+                visibilityTimeoutOffset = vtSeconds
+              }
+
+deadLetterTransactionally ::
+  (Error PgmqRuntimeError :> es, IOE :> es) =>
+  PgmqAdapterEnv ->
+  PgmqAdapterConfig ->
+  DeadLetterConfig ->
+  Pgmq.Message ->
+  DeadLetterReason ->
+  Maybe Value ->
+  Eff es ()
+deadLetterTransactionally env config dlqConfig msg reason dlqHeaders = do
+  result <- liftIO $ Pool.use env.pool session
+  case result of
+    Left err -> throwError (fromUsageError err)
+    Right () -> pure ()
+  where
+    dlqBody = mkDlqPayload msg reason dlqConfig.includeMetadata
+    sourceQuery = MessageQuery config.queueName msg.messageId
+    session =
+      Transaction.Sessions.transaction
+        Transaction.Sessions.ReadCommitted
+        Transaction.Sessions.Write
+        tx
+    tx = do
+      case dlqConfig.dlqTarget of
+        DirectQueue dlqQueueName ->
+          case dlqHeaders of
+            Just headers ->
+              void $
+                Transaction.statement
+                  SendMessageWithHeaders
+                    { queueName = dlqQueueName,
+                      messageBody = dlqBody,
+                      messageHeaders = Pgmq.MessageHeaders headers,
+                      delay = Nothing
+                    }
+                  Msg.sendMessageWithHeaders
+            Nothing ->
+              void $
+                Transaction.statement
+                  SendMessage
+                    { queueName = dlqQueueName,
+                      messageBody = dlqBody,
+                      delay = Nothing
+                    }
+                  Msg.sendMessage
+        TopicRoute routingKey ->
+          case dlqHeaders of
+            Just headers ->
+              void $
+                Transaction.statement
+                  SendTopicWithHeaders
+                    { routingKey = routingKey,
+                      messageBody = dlqBody,
+                      messageHeaders = Pgmq.MessageHeaders headers,
+                      delay = Nothing
+                    }
+                  Msg.sendTopicWithHeaders
+            Nothing ->
+              void $
+                Transaction.statement
+                  SendTopic
+                    { routingKey = routingKey,
+                      messageBody = dlqBody,
+                      delay = Nothing
+                    }
+                  Msg.sendTopic
+      void $ Transaction.statement sourceQuery Msg.deleteMessage
 
 -- | Merge the consumer's current trace headers with the original
 -- message's headers JSON for the DLQ-write path.
@@ -338,24 +375,29 @@ mergeDlqHeaders (Just consumerHdrs) originalHeaders =
     -- Convert TraceHeaders ([(ByteString, ByteString)]) to a JSON object.
     traceHeadersToKeyMap hdrs =
       KeyMap.fromList
-        [ (Key.fromText (TE.decodeUtf8 k), String (TE.decodeUtf8 v))
+        [ (Key.fromText (TE.decodeUtf8Lenient k), String (TE.decodeUtf8Lenient v))
         | (k, v) <- hdrs
         ]
 
 -- | Create an Ingested from a pgmq Message.
 -- Handles auto dead-lettering when maxRetries is exceeded.
 mkIngested ::
-  (Pgmq :> es, IOE :> es, Tracing :> es) =>
+  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es, Tracing :> es) =>
+  PgmqAdapterEnv ->
   PgmqAdapterConfig ->
   Pgmq.Message ->
   Eff es (Maybe (Ingested es Value))
-mkIngested config msg = do
+mkIngested env config msg = do
+  finalizedRef <- liftIO $ newIORef False
+  lease <- mkLease config msg
+  let ackHandle = mkAckHandle env config finalizedRef msg
   -- Check if max retries exceeded
   if msg.readCount > config.maxRetries
     then do
       -- Auto dead-letter messages that exceed retry limit
-      let ackHandle = mkAckHandle config msg
       ackHandle.finalize (AckDeadLetter MaxRetriesExceeded)
+        `catchError` \_callStack err -> liftIO (env.onAckFailure msg err)
+      liftIO $ env.onAutoDeadLetter msg
       -- Return Nothing - this message won't be processed by handler
       pure Nothing
     else
@@ -363,8 +405,8 @@ mkIngested config msg = do
         Just
           Ingested
             { envelope = pgmqMessageToEnvelope msg,
-              ack = mkAckHandle config msg,
-              lease = Just (mkLease config.queueName msg.messageId)
+              ack = ackHandle,
+              lease = Just lease
             }
 
 -- | Stream of message batches from pgmq.
@@ -374,27 +416,8 @@ pgmqChunks ::
   (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es) =>
   PgmqAdapterConfig ->
   Stream (Eff es) (Vector Pgmq.Message)
-pgmqChunks config = Stream.repeatM (pollRetrying 1 initialBackoff)
+pgmqChunks config = Stream.repeatM (retryingTransient config.pollRetry poll)
   where
-    PollRetryConfig
-      { maxAttempts = retryMaxAttempts,
-        initialBackoff = initialBackoff,
-        maxBackoff = retryMaxBackoff
-      } = config.pollRetry
-
-    pollRetrying ::
-      (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es) =>
-      Int ->
-      NominalDiffTime ->
-      Eff es (Vector Pgmq.Message)
-    pollRetrying attempt backoff =
-      poll `catchError` \_callStack err ->
-        if isTransient err && attempt < retryMaxAttempts
-          then do
-            liftIO $ threadDelay (nominalToMicros backoff)
-            pollRetrying (attempt + 1) (min (backoff * 2) retryMaxBackoff)
-          else throwError err
-
     poll :: (Pgmq :> es, IOE :> es) => Eff es (Vector Pgmq.Message)
     poll = case config.fifoConfig of
       Nothing -> pollNonFifo
@@ -431,6 +454,24 @@ pgmqChunks config = Stream.repeatM (pollRetrying 1 initialBackoff)
     nominalToMicros :: NominalDiffTime -> Int
     nominalToMicros t = floor (nominalDiffTimeToSeconds t * 1_000_000)
 
+retryingTransient ::
+  (Error PgmqRuntimeError :> es, IOE :> es) =>
+  PollRetryConfig ->
+  Eff es a ->
+  Eff es a
+retryingTransient retry action = go 1 retry.initialBackoff
+  where
+    go attempt backoff =
+      action `catchError` \_callStack err ->
+        if isTransient err && attempt < retry.maxAttempts
+          then do
+            liftIO $ threadDelay (nominalToMicros backoff)
+            go (attempt + 1) (min (backoff * 2) retry.maxBackoff)
+          else throwError err
+
+    nominalToMicros :: NominalDiffTime -> Int
+    nominalToMicros t = floor (nominalDiffTimeToSeconds t * 1_000_000)
+
 -- | Flatten message chunks into individual messages.
 -- Uses Streamly's unfoldEach to expand each Vector into individual elements,
 -- ensuring ALL messages from each batch are processed (not just the first).
@@ -451,63 +492,30 @@ pgmqMessages config =
 -- Uses unfoldEach to process ALL messages from each batch, not just the first.
 pgmqSource ::
   (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es, Tracing :> es) =>
+  PgmqAdapterEnv ->
   PgmqAdapterConfig ->
   Stream (Eff es) (Ingested es Value)
-pgmqSource config =
+pgmqSource env config =
   pgmqMessages config
-    & Stream.mapMaybeM (mkIngested config) -- Convert + filter auto-DLQ'd messages
+    & Stream.mapMaybeM (mkIngested env config) -- Convert + filter auto-DLQ'd messages
 
--- | Stream of message batches with concurrent prefetching.
--- Uses parBuffered to poll the next batch while current batch is being processed.
--- This reduces latency by overlapping polling with message processing.
---
--- Note: Prefetched messages have their visibility timeout ticking. Ensure
--- bufferSize * batchSize * avgProcessingTime < visibilityTimeout to avoid
--- messages re-appearing before they're processed.
-pgmqChunksPrefetch ::
+releaseMessages ::
   (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es) =>
-  (StreamP.Config -> StreamP.Config) ->
+  PgmqAdapterEnv ->
   PgmqAdapterConfig ->
-  Stream (Eff es) (Vector Pgmq.Message)
-pgmqChunksPrefetch prefetchConfig config =
-  pgmqChunks config
-    & StreamP.parBuffered prefetchConfig
-
--- | Flatten prefetched message chunks into individual messages.
--- Like pgmqMessages but with concurrent prefetching of batches.
-pgmqMessagesPrefetch ::
-  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es) =>
-  (StreamP.Config -> StreamP.Config) ->
-  PgmqAdapterConfig ->
-  Stream (Eff es) Pgmq.Message
-pgmqMessagesPrefetch prefetchConfig config =
-  pgmqChunksPrefetch prefetchConfig config
-    & Stream.filter (not . Vector.null) -- Skip empty batches
-    & Stream.unfoldEach vectorUnfold -- Flatten Vector to individual elements
-  where
-    vectorUnfold = Unfold.unfoldr Vector.uncons
-
--- | Create message source stream with concurrent prefetching.
--- Polls the next batch while current messages are being processed.
---
--- This provides lower latency than pgmqSource by keeping messages ready
--- in a buffer for immediate consumption. The trade-off is that prefetched
--- messages have their visibility timeout ticking.
---
--- Usage:
---
--- @
--- -- With default prefetch settings (4 batches ahead)
--- source = pgmqSourceWithPrefetch defaultPrefetchConfig config
---
--- -- With custom buffer size
--- source = pgmqSourceWithPrefetch (StreamP.maxBuffer 2) config
--- @
-pgmqSourceWithPrefetch ::
-  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es, Tracing :> es) =>
-  (StreamP.Config -> StreamP.Config) ->
-  PgmqAdapterConfig ->
-  Stream (Eff es) (Ingested es Value)
-pgmqSourceWithPrefetch prefetchConfig config =
-  pgmqMessagesPrefetch prefetchConfig config
-    & Stream.mapMaybeM (mkIngested config)
+  Vector Pgmq.Message ->
+  Eff es ()
+releaseMessages env config messages = do
+  let msgIds = fmap (.messageId) (Vector.toList messages)
+  retryingTransient
+    config.ackRetry
+    ( void $
+        batchChangeVisibilityTimeout $
+          BatchVisibilityTimeoutQuery
+            { queueName = config.queueName,
+              messageIds = msgIds,
+              visibilityTimeoutOffset = 0
+            }
+    )
+    `catchError` \_callStack err ->
+      liftIO $ traverse_ (\message -> env.onAckFailure message err) messages

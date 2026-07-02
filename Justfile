@@ -36,7 +36,7 @@ build:
 
 [group("build")]
 test:
-  cabal test shibuya-pgmq-adapter-test
+  cabal test shibuya-pgmq-adapter-test --enable-tests
 
 [group("build")]
 bench:

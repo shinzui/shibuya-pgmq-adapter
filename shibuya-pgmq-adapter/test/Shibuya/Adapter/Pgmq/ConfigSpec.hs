@@ -9,7 +9,7 @@ spec = do
   defaultConfigSpec
   defaultPollingConfigSpec
   defaultPollRetryConfigSpec
-  defaultPrefetchConfigSpec
+  validateConfigSpec
   deadLetterTargetSpec
   smartConstructorSpec
 
@@ -38,17 +38,20 @@ defaultConfigSpec = describe "defaultConfig" $ do
   it "uses the default poll retry policy" $ do
     config.pollRetry `shouldBe` defaultPollRetryConfig
 
+  it "uses the default ack retry policy" $ do
+    config.ackRetry `shouldBe` defaultPollRetryConfig
+
   it "sets deadLetterConfig to Nothing" $ do
     config.deadLetterConfig `shouldBe` Nothing
+
+  it "sets haltVisibilityTimeout to Nothing" $ do
+    config.haltVisibilityTimeout `shouldBe` Nothing
 
   it "sets maxRetries to 3" $ do
     config.maxRetries `shouldBe` 3
 
   it "sets fifoConfig to Nothing" $ do
     config.fifoConfig `shouldBe` Nothing
-
-  it "sets prefetchConfig to Nothing" $ do
-    config.prefetchConfig `shouldBe` Nothing
 
 -- | Tests for defaultPollingConfig
 defaultPollingConfigSpec :: Spec
@@ -80,11 +83,43 @@ defaultPollRetryConfigSpec = describe "defaultPollRetryConfig" $ do
   it "caps backoff at five seconds" $ do
     retryMaxBackoff `shouldBe` 5
 
--- | Tests for defaultPrefetchConfig
-defaultPrefetchConfigSpec :: Spec
-defaultPrefetchConfigSpec = describe "defaultPrefetchConfig" $ do
-  it "has bufferSize of 4" $ do
-    defaultPrefetchConfig.bufferSize `shouldBe` 4
+validateConfigSpec :: Spec
+validateConfigSpec = describe "validateConfig" $ do
+  let queueName = case parseQueueName "validate_queue" of
+        Right q -> q
+        Left e -> error $ "Unexpected: " <> show e
+      base = defaultConfig queueName
+
+  it "accepts the default config" $ do
+    validateConfig base `shouldBe` Right base
+
+  it "rejects batchSize below one" $ do
+    validateConfig base {batchSize = 0} `shouldBe` Left (InvalidBatchSize 0)
+
+  it "rejects visibilityTimeout below one" $ do
+    validateConfig base {visibilityTimeout = 0} `shouldBe` Left (InvalidVisibilityTimeout 0)
+
+  it "rejects non-positive standard polling interval" $ do
+    validateConfig base {polling = StandardPolling 0} `shouldBe` Left (InvalidStandardPollInterval 0)
+
+  it "rejects invalid long polling fields" $ do
+    validateConfig base {polling = LongPolling 0 100} `shouldBe` Left (InvalidLongPollSeconds 0)
+    validateConfig base {polling = LongPolling 10 0} `shouldBe` Left (InvalidLongPollIntervalMs 0)
+
+  it "rejects negative maxRetries but accepts zero" $ do
+    validateConfig base {maxRetries = -1} `shouldBe` Left (InvalidMaxRetries (-1))
+    validateConfig base {maxRetries = 0} `shouldBe` Right base {maxRetries = 0}
+
+  it "rejects invalid halt visibility timeout" $ do
+    validateConfig base {haltVisibilityTimeout = Just 0} `shouldBe` Left (InvalidHaltVisibilityTimeout 0)
+
+  it "rejects invalid retry policies" $ do
+    let invalidAttempts = defaultPollRetryConfig {maxAttempts = 0}
+        invalidBackoff = defaultPollRetryConfig {initialBackoff = -1}
+    validateConfig base {pollRetry = invalidAttempts} `shouldBe` Left (InvalidPollRetryMaxAttempts 0)
+    validateConfig base {ackRetry = invalidAttempts} `shouldBe` Left (InvalidAckRetryMaxAttempts 0)
+    validateConfig base {pollRetry = invalidBackoff} `shouldBe` Left (InvalidPollRetryBackoff (-1) 5)
+    validateConfig base {ackRetry = invalidBackoff} `shouldBe` Left (InvalidAckRetryBackoff (-1) 5)
 
 -- | Tests for DeadLetterTarget
 deadLetterTargetSpec :: Spec

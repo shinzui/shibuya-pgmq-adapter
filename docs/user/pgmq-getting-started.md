@@ -76,7 +76,7 @@ defaultConfig :: QueueName -> PgmqAdapterConfig
 -- deadLetterConfig = Nothing
 -- maxRetries = 3
 -- fifoConfig = Nothing
--- prefetchConfig = Nothing
+-- lookaheadConfig = Nothing
 ```
 
 Override fields as needed:
@@ -164,5 +164,5 @@ pgmq tracks retries via the `readCount` field. When a message's `readCount` exce
 
 - [Dead-Letter Queues](./pgmq-dead-letter-queues.md) - Configure DLQ with direct or topic-based routing
 - [Topic Routing](./pgmq-topic-routing.md) - AMQP-like topic binding and pattern matching
-- [Advanced PGMQ](./pgmq-advanced.md) - FIFO ordering, prefetching, lease extension, tuning
+- [Advanced PGMQ](./pgmq-advanced.md) - FIFO ordering, lookaheading, lease extension, tuning
 - [Configuration Reference](../pgmq-adapter/CONFIGURATION.md) - Complete field-by-field reference

@@ -1,7 +1,7 @@
 -- | Notification message type for the notifications queue.
 --
 -- Notifications are processed with high throughput settings
--- (large batch size, prefetch enabled) since they don't require
+-- (large batch size, lookahead enabled) since they don't require
 -- ordering and can tolerate some message loss.
 module Example.Types.Notification
   ( Notification (..),

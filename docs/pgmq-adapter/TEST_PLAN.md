@@ -343,8 +343,8 @@ describe "defaultConfig" $ do
   it "sets fifoConfig to Nothing" $ do
     config.fifoConfig `shouldBe` Nothing
 
-  it "sets prefetchConfig to Nothing" $ do
-    config.prefetchConfig `shouldBe` Nothing
+  it "sets lookaheadConfig to Nothing" $ do
+    config.lookaheadConfig `shouldBe` Nothing
 
 describe "defaultPollingConfig" $ do
   it "is StandardPolling" $ do
@@ -357,9 +357,9 @@ describe "defaultPollingConfig" $ do
       StandardPolling interval -> interval `shouldBe` 1
       _ -> expectationFailure "Expected StandardPolling"
 
-describe "defaultPrefetchConfig" $ do
+describe "defaultLookaheadConfig" $ do
   it "has bufferSize of 4" $ do
-    defaultPrefetchConfig.bufferSize `shouldBe` 4
+    defaultLookaheadConfig.bufferSize `shouldBe` 4
 ```
 
 ### 3. Internal Function Tests (Internal.hs)
@@ -1014,23 +1014,23 @@ describe "Batch processing" $ do
     remaining `shouldBe` 0
 ```
 
-### 8. Prefetch Tests
+### 8. Lookahead Tests
 
 ```haskell
-describe "Prefetching" $ do
-  it "prefetch reduces latency" $ withTestFixture $ \fixture -> do
+describe "Lookaheading" $ do
+  it "lookahead reduces latency" $ withTestFixture $ \fixture -> do
     -- Enqueue messages
     runEff . runPgmq fixture.pool $ do
       forM_ [1..20 :: Int] $ \i ->
         sendMessage $ SendMessage fixture.queueName
           (Pgmq.MessageBody (object ["n" .= i])) Nothing
 
-    -- Process without prefetch
+    -- Process without lookahead
     startWithout <- getCurrentTime
     runEff . runPgmq fixture.pool $ do
       let config = (defaultConfig fixture.queueName)
             { batchSize = 5,
-              prefetchConfig = Nothing
+              lookaheadConfig = Nothing
             }
       adapter <- pgmqAdapter config
       Stream.fold (Fold.drainMapM $ \ingested -> do
@@ -1045,12 +1045,12 @@ describe "Prefetching" $ do
         sendMessage $ SendMessage fixture.queueName
           (Pgmq.MessageBody (object ["n" .= i])) Nothing
 
-    -- Process with prefetch
+    -- Process with lookahead
     startWith <- getCurrentTime
     runEff . runPgmq fixture.pool $ do
       let config = (defaultConfig fixture.queueName)
             { batchSize = 5,
-              prefetchConfig = Just PrefetchConfig { bufferSize = 4 }
+              lookaheadConfig = Just LookaheadConfig { bufferSize = 4 }
             }
       adapter <- pgmqAdapter config
       Stream.fold (Fold.drainMapM $ \ingested -> do
@@ -1062,7 +1062,7 @@ describe "Prefetching" $ do
     let timeWithout = diffUTCTime endWithout startWithout
         timeWith = diffUTCTime endWith startWith
 
-    -- Prefetch should be faster (poll overlaps with processing)
+    -- Lookahead should be faster (poll overlaps with processing)
     timeWith `shouldSatisfy` (< timeWithout)
 ```
 
@@ -1324,7 +1324,7 @@ describe "Performance benchmarks" $ do
       putStrLn $ "Throughput (batch=100): " ++ show throughput ++ " msg/s"
       throughput `shouldSatisfy` (> 500)  -- Should be much faster
 
-    it "benchmark: 1000 messages, batchSize=100, prefetch=4" $ withTestFixture $ \fixture -> do
+    it "benchmark: 1000 messages, batchSize=100, lookahead=4" $ withTestFixture $ \fixture -> do
       runEff . runPgmq fixture.pool $ do
         forM_ [1..1000 :: Int] $ \i ->
           sendMessage $ SendMessage fixture.queueName
@@ -1334,7 +1334,7 @@ describe "Performance benchmarks" $ do
       runEff . runPgmq fixture.pool $ do
         let config = (defaultConfig fixture.queueName)
               { batchSize = 100,
-                prefetchConfig = Just PrefetchConfig { bufferSize = 4 }
+                lookaheadConfig = Just LookaheadConfig { bufferSize = 4 }
               }
         adapter <- pgmqAdapter config
         Stream.fold (Fold.drainMapM $ \ingested ->
@@ -1345,7 +1345,7 @@ describe "Performance benchmarks" $ do
       let elapsed = diffUTCTime end start
           throughput = 1000 / realToFrac elapsed :: Double
 
-      putStrLn $ "Throughput (batch=100, prefetch=4): " ++ show throughput ++ " msg/s"
+      putStrLn $ "Throughput (batch=100, lookahead=4): " ++ show throughput ++ " msg/s"
 
   describe "Latency" $ do
     it "measures p50/p99 latency" $ withTestFixture $ \fixture -> do
@@ -1869,7 +1869,7 @@ tests getPool = testGroup "Benchmark"
 
 ### Configuration Combinations
 
-| Test | Standard Poll | Long Poll | FIFO-TO | FIFO-RR | Prefetch | DLQ |
+| Test | Standard Poll | Long Poll | FIFO-TO | FIFO-RR | Lookahead | DLQ |
 |------|:-------------:|:---------:|:-------:|:-------:|:--------:|:---:|
 | Basic processing | ✓ | ✓ | ✓ | ✓ | ✓ | - |
 | Visibility timeout | ✓ | ✓ | - | - | - | - |
@@ -1903,6 +1903,6 @@ tests getPool = testGroup "Benchmark"
 | Scenario | Test Approach |
 |----------|---------------|
 | Multiple consumers same queue | Spawn multiple adapters, verify no duplicates |
-| Prefetch with slow handler | Ensure VT not exceeded |
+| Lookahead with slow handler | Ensure VT not exceeded |
 | Rapid shutdown/restart | No message loss |
 | Handler timeout | Message reappears after VT |

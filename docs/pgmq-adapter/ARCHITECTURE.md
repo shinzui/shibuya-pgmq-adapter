@@ -11,7 +11,7 @@ This document describes the architecture, data flow, and design decisions of the
 - [Ack Decision Handling](#ack-decision-handling)
 - [Polling Strategies](#polling-strategies)
 - [FIFO Support](#fifo-support)
-- [Prefetching](#prefetching)
+- [Lookaheading](#lookaheading)
 - [Shutdown Handling](#shutdown-handling)
 - [Design Decisions](#design-decisions)
 
@@ -36,7 +36,7 @@ The adapter translates between these models:
 │   │  [Poll pgmq]                  [Convert + filter]                 │   │
 │   │  [Vector Message]             [auto-DLQ if maxRetries]           │   │
 │   │                                                                  │   │
-│   │  (optional: parBuffered for concurrent prefetching)              │   │
+│   │  (optional: parBuffered for concurrent lookaheading)              │   │
 │   └─────────────────────────────────────────────────────────────────┘   │
 │                                │                                         │
 │                                ▼                                         │
@@ -149,12 +149,12 @@ pgmqSource config =
 - Filters out auto-dead-lettered messages (returns `Nothing`)
 - Creates `AckHandle` and `Lease` for each message
 
-### Layer 4: Prefetching (Optional)
+### Layer 4: Lookaheading (Optional)
 
 ```haskell
-pgmqSourceWithPrefetch :: Stream (Eff es) (Ingested es Value)
-pgmqSourceWithPrefetch prefetchConfig config =
-  pgmqMessagesPrefetch prefetchConfig config
+pgmqSourceWithLookahead :: Stream (Eff es) (Ingested es Value)
+pgmqSourceWithLookahead lookaheadConfig config =
+  pgmqMessagesLookahead lookaheadConfig config
     & Stream.mapMaybeM (mkIngested config)
 ```
 
@@ -312,9 +312,9 @@ Next batch:          [A:2] [B:2] [C:2]  ← Fair distribution
 
 Uses `readGroupedRoundRobin` / `readGroupedRoundRobinWithPoll`. Good for multi-tenant systems.
 
-## Prefetching
+## Lookaheading
 
-### Without Prefetching (Default)
+### Without Lookaheading (Default)
 
 ```
 Poll ─────────► Process ─────────► Poll ─────────► Process
@@ -323,7 +323,7 @@ Poll ─────────► Process ─────────► Poll 
 Total per message: 60ms (10ms poll latency)
 ```
 
-### With Prefetching
+### With Lookaheading
 
 ```
 Poll ──────────────────────────────────────────────►
@@ -341,7 +341,7 @@ Total per message: ~50ms (poll overlapped)
 The `parBuffered` combinator runs polling concurrently with consumption:
 
 ```haskell
-pgmqSourceWithPrefetch prefetchConfig config =
+pgmqSourceWithLookahead lookaheadConfig config =
   pgmqChunks config
     & StreamP.parBuffered (StreamP.maxBuffer bufferSize)
     & Stream.filter (not . Vector.null)
@@ -351,7 +351,7 @@ pgmqSourceWithPrefetch prefetchConfig config =
 
 ### Visibility Timeout Safety
 
-Prefetched messages have their VT ticking while buffered. Ensure:
+Lookaheaded messages have their VT ticking while buffered. Ensure:
 
 ```
 bufferSize * batchSize * avgProcessingTime < visibilityTimeout
@@ -430,11 +430,11 @@ Messages in-flight are processed to completion. Messages not yet polled remain i
 
 **Rationale**: Some applications prefer archiving over separate DLQ. Flexibility for different use cases.
 
-### 6. Prefetching as Optional
+### 6. Lookaheading as Optional
 
-**Decision**: Prefetching is disabled by default.
+**Decision**: Lookaheading is disabled by default.
 
-**Rationale**: Prefetching adds complexity (VT pressure) and isn't needed for all workloads. Users opt-in when latency matters.
+**Rationale**: Lookaheading adds complexity (VT pressure) and isn't needed for all workloads. Users opt-in when latency matters.
 
 ### 7. AckHalt Uses Long VT Extension
 

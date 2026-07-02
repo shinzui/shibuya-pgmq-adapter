@@ -172,7 +172,7 @@ The OTLP exporter uses HTTP/protobuf protocol (port 4318), not gRPC (port 4317).
 
 ### Known Issues
 
-**Prefetch Configuration**: The prefetch feature (`prefetchConfig`) is currently disabled in this example due to an STM deadlock issue with streamly's `parBuffered` operator. When enabled, the processor thread blocks indefinitely in an STM transaction. The high-throughput notifications queue uses standard polling with a large batch size as a workaround. See `docs/plans/PREFETCH_STM_BUG.md` for details.
+**Lookahead Configuration**: The lookahead feature (`lookaheadConfig`) is currently disabled in this example due to an STM deadlock issue with streamly's `parBuffered` operator. When enabled, the processor thread blocks indefinitely in an STM transaction. The high-throughput notifications queue uses standard polling with a large batch size as a workaround. See `docs/plans/PREFETCH_STM_BUG.md` for details.
 
 ## Metrics Endpoints
 
@@ -253,4 +253,4 @@ Payments use FIFO ordering by `customerId` via the `x-pgmq-group` header.
 ### Notifications Handler
 - Fast processing (1ms simulated delay)
 - No DLQ - invalid notifications are acknowledged
-- High throughput with prefetching enabled
+- High throughput with lookaheading enabled

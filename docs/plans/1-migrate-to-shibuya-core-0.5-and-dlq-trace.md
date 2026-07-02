@@ -212,7 +212,7 @@ remaining gap, not a missing feature.
 ### M2.1 — Producer-side `Tracing` constraint propagates broadly (2026-05-05)
 
 Adding the `Tracing :> es` constraint to `mkAckHandle` cascaded
-through `mkIngested`, `pgmqSource`, `pgmqSourceWithPrefetch`, and
+through `mkIngested`, `pgmqSource`, `pgmqSourceWithLookahead`, and
 `pgmqAdapter` (the public surface). All call sites in this repo
 (jitsurei consumer + bench harness) already run under `runTracing`
 or `runTracingNoop` so the cascade did not require additional

@@ -254,14 +254,12 @@ paymentsAdapterConfig =
     }
 
 -- | Notifications adapter config: batch=20, short VT
--- NOTE: prefetch is disabled due to STM deadlock issue with streamly parBuffered
 notificationsAdapterConfig :: PgmqAdapterConfig
 notificationsAdapterConfig =
   (Pgmq.defaultConfig notificationsQueueName)
     { batchSize = 20,
       visibilityTimeout = 10, -- Short VT for fast processing
       polling = StandardPolling {pollInterval = 0.5},
-      prefetchConfig = Nothing,
       maxRetries = 1 -- Don't retry notifications much
     }
 
@@ -368,7 +366,11 @@ runBackoffDemoConsumer ::
   IO ()
 runBackoffDemoConsumer pool tracer policy failuresRef shutdownVar = do
   eResult <- runEff $ runErrorNoCallStack @PgmqRuntimeError $ runPgmqTraced pool tracer $ runTracing tracer $ do
-    adapter <- pgmqAdapter backoffDemoAdapterConfig
+    let env = Pgmq.mkPgmqAdapterEnv pool
+    adapterResult <- pgmqAdapter env backoffDemoAdapterConfig
+    adapter <- case adapterResult of
+      Left err -> liftIO $ error $ "Invalid PGMQ adapter config: " <> show err
+      Right adapter -> pure adapter
     liftIO $ Text.putStrLn "Adapter created"
 
     let proc = mkProcessor adapter (backoffDemoHandler failuresRef policy)
@@ -410,10 +412,11 @@ runConsumer ::
   IO ()
 runConsumer pool tracer metricsPort shutdownVar = do
   eResult <- runEff $ runErrorNoCallStack @PgmqRuntimeError $ runPgmqTraced pool tracer $ runTracing tracer $ do
+    let env = Pgmq.mkPgmqAdapterEnv pool
     -- Create adapters
-    ordersAdapter <- pgmqAdapter ordersAdapterConfig
-    paymentsAdapter <- pgmqAdapter paymentsAdapterConfig
-    notificationsAdapter <- pgmqAdapter notificationsAdapterConfig
+    ordersAdapter <- requireAdapter "orders" =<< pgmqAdapter env ordersAdapterConfig
+    paymentsAdapter <- requireAdapter "payments" =<< pgmqAdapter env paymentsAdapterConfig
+    notificationsAdapter <- requireAdapter "notifications" =<< pgmqAdapter env notificationsAdapterConfig
 
     liftIO $ Text.putStrLn "Adapters created"
 
@@ -467,3 +470,7 @@ runConsumer pool tracer metricsPort shutdownVar = do
     Right _ -> pure ()
 
   Text.putStrLn "Consumer stopped."
+  where
+    requireAdapter name = \case
+      Left err -> liftIO $ error $ "Invalid " <> name <> " PGMQ adapter config: " <> show err
+      Right adapter -> pure adapter

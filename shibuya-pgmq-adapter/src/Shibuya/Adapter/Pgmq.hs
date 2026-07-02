@@ -21,7 +21,7 @@
 --       runEff
 --         . runPgmq pool
 --         $ do
---             adapter <- pgmqAdapter config
+--             Right adapter <- pgmqAdapter (mkPgmqAdapterEnv pool) config
 --             result <- runApp IgnoreFailures 100
 --               [ (ProcessorId "orders", QueueProcessor adapter handleOrder)
 --               ]
@@ -74,13 +74,16 @@ module Shibuya.Adapter.Pgmq
 
     -- * Configuration
     PgmqAdapterConfig (..),
+    PgmqAdapterEnv (..),
+    mkPgmqAdapterEnv,
+    PgmqConfigError (..),
     PollingConfig (..),
     PollRetryConfig (..),
     DeadLetterConfig (..),
     DeadLetterTarget (..),
     FifoConfig (..),
     FifoReadStrategy (..),
-    PrefetchConfig (..),
+    validateConfig,
 
     -- * Smart Constructors
     directDeadLetter,
@@ -90,7 +93,6 @@ module Shibuya.Adapter.Pgmq
     defaultConfig,
     defaultPollingConfig,
     defaultPollRetryConfig,
-    defaultPrefetchConfig,
 
     -- * Topic Management (pgmq 1.11.0+)
     bindQueueTopics,
@@ -119,6 +121,8 @@ import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVarIO, writeTVa
 import Control.Monad (forM_)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value)
+import Data.Function ((&))
+import Data.Vector qualified as Vector
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error)
 import Pgmq.Effectful (PgmqRuntimeError)
@@ -145,21 +149,24 @@ import Shibuya.Adapter.Pgmq.Config
     FifoConfig (..),
     FifoReadStrategy (..),
     PgmqAdapterConfig (..),
+    PgmqAdapterEnv (..),
+    PgmqConfigError (..),
     PollRetryConfig (..),
     PollingConfig (..),
-    PrefetchConfig (..),
     defaultConfig,
     defaultPollRetryConfig,
     defaultPollingConfig,
-    defaultPrefetchConfig,
     directDeadLetter,
+    mkPgmqAdapterEnv,
     topicDeadLetter,
+    validateConfig,
   )
-import Shibuya.Adapter.Pgmq.Internal (pgmqSource, pgmqSourceWithPrefetch)
+import Shibuya.Adapter.Pgmq.Internal (mkIngested, pgmqChunks, releaseMessages)
+import Shibuya.Core.Ingested (Ingested)
 import Shibuya.Telemetry.Effect (Tracing)
 import Streamly.Data.Stream (Stream)
 import Streamly.Data.Stream qualified as Stream
-import Streamly.Data.Stream.Prelude qualified as StreamP
+import Streamly.Data.Unfold qualified as Unfold
 
 -- | Create a PGMQ adapter with the given configuration.
 --
@@ -170,7 +177,7 @@ import Streamly.Data.Stream.Prelude qualified as StreamP
 -- * Lease extension capability for long-running handlers
 -- * Dead-letter queue support (optional)
 -- * FIFO ordering support (optional)
--- * Concurrent prefetching (optional, via 'prefetchConfig')
+-- * Typed configuration validation
 --
 -- == Effect Requirements
 --
@@ -181,55 +188,52 @@ import Streamly.Data.Stream.Prelude qualified as StreamP
 -- == Example
 --
 -- @
--- adapter <- pgmqAdapter config
+-- Right adapter <- pgmqAdapter env config
 -- runApp IgnoreFailures 100
 --   [ (ProcessorId "my-processor", QueueProcessor adapter myHandler)
 --   ]
 -- @
---
--- == Prefetching
---
--- To enable concurrent prefetching (polls next batch while processing current):
---
--- @
--- let config = (defaultConfig queueName) { prefetchConfig = Just defaultPrefetchConfig }
--- adapter <- pgmqAdapter config
--- @
 pgmqAdapter ::
   (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es, Tracing :> es) =>
+  PgmqAdapterEnv ->
   PgmqAdapterConfig ->
-  Eff es (Adapter es Value)
-pgmqAdapter config = do
-  -- Create shutdown signal
-  shutdownVar <- liftIO $ newTVarIO False
+  Eff es (Either PgmqConfigError (Adapter es Value))
+pgmqAdapter env config =
+  case validateConfig config of
+    Left err -> pure (Left err)
+    Right validConfig -> do
+      shutdownVar <- liftIO $ newTVarIO False
+      let messageSource = pgmqSourceWithShutdown env validConfig shutdownVar
+      pure $
+        Right
+          Adapter
+            { adapterName = "pgmq:" <> queueNameToText validConfig.queueName,
+              source = messageSource,
+              shutdown = liftIO $ atomically $ writeTVar shutdownVar True
+            }
 
-  -- Select source based on prefetch configuration
-  let messageSource = case config.prefetchConfig of
-        Nothing ->
-          -- No prefetching - simple sequential polling
-          pgmqSource config
-        Just prefetch ->
-          -- Concurrent prefetching enabled
-          let prefetchSettings = StreamP.maxBuffer (fromIntegral prefetch.bufferSize)
-           in pgmqSourceWithPrefetch prefetchSettings config
-
-  pure
-    Adapter
-      { adapterName = "pgmq:" <> queueNameToText config.queueName,
-        source = takeUntilShutdown shutdownVar messageSource,
-        shutdown = liftIO $ atomically $ writeTVar shutdownVar True
-      }
-
--- | Take from stream until shutdown signal is set.
-takeUntilShutdown ::
-  (IOE :> es) =>
+-- | Poll in chunks so a shutdown can release messages that were read from pgmq
+-- but not yet handed to Shibuya's bounded inbox.
+pgmqSourceWithShutdown ::
+  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es, Tracing :> es) =>
+  PgmqAdapterEnv ->
+  PgmqAdapterConfig ->
   TVar Bool ->
-  Stream (Eff es) a ->
-  Stream (Eff es) a
-takeUntilShutdown shutdownVar =
-  Stream.takeWhileM $ \_ -> do
-    isShutdown <- liftIO $ readTVarIO shutdownVar
-    pure (not isShutdown)
+  Stream (Eff es) (Ingested es Value)
+pgmqSourceWithShutdown env config shutdownVar =
+  pgmqChunks config
+    & Stream.filter (not . Vector.null)
+    & Stream.takeWhileM keepChunk
+    & Stream.unfoldEach (Unfold.unfoldr Vector.uncons)
+    & Stream.mapMaybeM (mkIngested env config)
+  where
+    keepChunk chunk = do
+      isShutdown <- liftIO $ readTVarIO shutdownVar
+      if isShutdown
+        then do
+          releaseMessages env config chunk
+          pure False
+        else pure True
 
 --------------------------------------------------------------------------------
 -- Topic Management (pgmq 1.11.0+)
