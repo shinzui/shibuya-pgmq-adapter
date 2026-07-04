@@ -72,6 +72,8 @@ import Pgmq.Effectful (runPgmq)
 import Hasql.Pool qualified as Pool
 import Effectful (runEff)
 import Effectful.Error.Static (runErrorNoCallStack)
+import Shibuya.Telemetry.Effect (runTracing)
+import OpenTelemetry.Trace qualified as OTel
 
 main :: IO ()
 main = do
@@ -84,8 +86,14 @@ main = do
   -- Create adapter configuration
   let config = defaultConfig queueName
 
+  -- Set up an OpenTelemetry tracer. `pgmqAdapter` requires `Tracing :> es`,
+  -- so the effect stack must include a tracing interpreter. The example app
+  -- (shibuya-pgmq-example) wires a real tracer the same way via `runTracing`.
+  provider <- OTel.initializeGlobalTracerProvider
+  let tracer = OTel.makeTracer provider "shibuya" OTel.tracerOptions
+
   -- Run with effectful
-  runResult <- runEff $ runErrorNoCallStack $ runPgmq pool $ do
+  runResult <- runEff $ runErrorNoCallStack $ runPgmq pool $ runTracing tracer $ do
     let env = mkPgmqAdapterEnv pool
 
     -- Create adapter
@@ -186,7 +194,7 @@ Trade-offs:
 
 ## Requirements
 
-- **GHC 9.10+** (GHC2024 language standard)
+- **GHC 9.12+** (GHC2024 language standard)
 - **PostgreSQL** with pgmq extension installed
 - **pgmq 1.8.0+** for FIFO support
 - **effectful 2.6+** for effect system integration
@@ -218,10 +226,17 @@ shibuya-pgmq-adapter/
 │               └── Internal.hs      # Stream implementation (not public)
 └── test/
     ├── Main.hs
+    ├── TestUtils.hs                 # Shared test helpers
+    ├── TmpPostgres.hs               # Ephemeral PostgreSQL (ephemeral-pg)
     └── Shibuya/
         └── Adapter/
             └── Pgmq/
-                └── ConvertSpec.hs   # Conversion tests
+                ├── ChaosSpec.hs        # Fault-injection / chaos tests
+                ├── ConfigSpec.hs       # Configuration tests
+                ├── ConvertSpec.hs      # Conversion tests
+                ├── IntegrationSpec.hs  # End-to-end integration tests
+                ├── InternalSpec.hs     # Stream/polling internals tests
+                └── PropertySpec.hs     # Property-based tests
 ```
 
 ### Public Modules

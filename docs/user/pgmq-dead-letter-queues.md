@@ -82,6 +82,7 @@ Both queues receive the dead-lettered message.
   "dead_letter_reason": "max_retries_exceeded",
   "original_message_id": 456,
   "original_enqueued_at": "2024-01-15T10:30:00Z",
+  "last_read_at": "2024-01-15T10:35:00Z",
   "read_count": 4,
   "original_headers": { "x-pgmq-group": "customer-1" }
 }

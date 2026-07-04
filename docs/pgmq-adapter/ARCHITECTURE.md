@@ -108,19 +108,22 @@ Time ─────────────────────────
 
 ## Stream Architecture
 
-The adapter constructs a Streamly stream through four layers:
+The adapter constructs a Streamly stream through several layers.
 
-### Layer 1: Chunk Polling (`pgmqChunks`)
+### Layer 1: Chunk Polling (`pgmqChunks` / `pgmqChunksPrefetch`)
 
 ```haskell
 pgmqChunks :: Stream (Eff es) (Vector Pgmq.Message)
-pgmqChunks config = Stream.repeatM poll
+pgmqChunks config = Stream.repeatM (retryingTransient config.pollRetry poll)
 ```
 
 - Infinite stream of message batches
 - Each poll returns a `Vector Message`
 - Handles both standard and long polling
 - Handles both FIFO and non-FIFO modes
+- Transient poll errors are retried per `config.pollRetry`
+
+When `prefetchConfig` is enabled, `pgmqChunksPrefetch` wraps `pgmqChunks` in Streamly's `parBuffered` (scoped under `ConcUnlift`) so batches are polled ahead on a background worker. See "Concurrent Prefetch" below.
 
 ### Layer 2: Batch Flattening (`pgmqMessages`)
 
@@ -137,15 +140,29 @@ Key insight: Uses `unfoldEach` to expand each `Vector` into individual elements.
 ### Layer 3: Conversion (`pgmqSource`)
 
 ```haskell
-pgmqSource :: Stream (Eff es) (Ingested es Value)
-pgmqSource config =
+pgmqSource :: PgmqAdapterEnv -> PgmqAdapterConfig -> Stream (Eff es) (Ingested es Value)
+pgmqSource env config =
   pgmqMessages config
-    & Stream.mapMaybeM (mkIngested config)
+    & Stream.mapMaybeM (mkIngested env config)
 ```
 
 - Converts each `Pgmq.Message` to `Ingested es Value`
 - Filters out auto-dead-lettered messages (returns `Nothing`)
 - Creates `AckHandle` and `Lease` for each message
+
+### Wiring: `pgmqSourceWithShutdown`
+
+The adapter (in `Pgmq.hs`) does not use `pgmqSource` directly; it wires `pgmqSourceWithShutdown`, which inserts a shutdown gate and selects the prefetching chunk stage. Its pipeline is:
+
+```haskell
+chunkStream                                         -- pgmqChunks OR pgmqChunksPrefetch
+  & Stream.filter (not . Vector.null)               -- skip empty batches
+  & Stream.takeWhileM keepChunk                     -- shutdown gate; releases undispatched chunks
+  & Stream.unfoldEach (Unfold.unfoldr Vector.uncons)-- flatten Vector to elements
+  & Stream.mapMaybeM (mkIngested env config)        -- convert + filter auto-DLQ'd messages
+```
+
+The `keepChunk` gate checks `shutdownVar`: on shutdown it releases any just-read, undispatched chunk (setting its visibility timeout to 0) and stops the stream.
 
 ## Type Mappings
 
@@ -170,9 +187,20 @@ pgmqMessageToEnvelope msg =
       cursor = Just (pgmqMessageIdToCursor msg.messageId),
       partition = extractPartition msg.headers,
       enqueuedAt = Just msg.enqueuedAt,
+      traceContext = extractTraceHeaders msg.headers,
+      headers = Nothing,
+      attempt = Just (readCountToAttempt msg.readCount),
+      attributes = HashMap.empty,
       payload = Pgmq.unMessageBody msg.body
     }
 ```
+
+Notes on the populated fields:
+
+- `traceContext` is derived from the message's `traceparent`/`tracestate` header keys via `extractTraceHeaders` (or `Nothing` when absent).
+- `attempt` is derived from pgmq's `readCount` via `readCountToAttempt` (readCount is 1-based, so first delivery maps to `Attempt 0`).
+- `headers` is deliberately `Nothing`: the JSONB `headers` object is unordered user metadata, consumed only to derive `partition` and `traceContext`, and is not re-presented as broker headers.
+- `attributes` is left empty (`HashMap.empty`) as a forward-compatible hook; there are no spec-defined pgmq messaging attributes yet.
 
 ## Ack Decision Handling
 
@@ -193,11 +221,11 @@ AckRetry (RetryDelay delay) ->
   changeVisibilityTimeout $ VisibilityTimeoutQuery
     { queueName = queueName,
       messageId = msgId,
-      visibilityTimeoutOffset = ceiling delay
+      visibilityTimeoutOffset = nominalToSeconds delay
     }
 ```
 
-Message becomes visible again after the specified delay. The `readCount` has already been incremented, so retries are tracked.
+Message becomes visible again after the specified delay. The delay is converted with `nominalToSeconds`, which **saturates at the `Int32` bounds** (rather than wrapping), so a misconfigured very-large delay produces a merely-very-long retry instead of a corrupt one. The `readCount` has already been incremented, so retries are tracked.
 
 ### AckDeadLetter
 
@@ -209,12 +237,24 @@ AckDeadLetter reason -> archiveMessage (MessageQuery queueName msgId)
 ```
 
 **With DLQ:**
+
+Dead-lettering runs in a **single hasql transaction** (`deadLetterTransactionally`, `ReadCommitted`/`Write`) that atomically sends the DLQ copy and deletes the source row, so a message is never lost or duplicated across the two operations:
+
 ```haskell
-AckDeadLetter reason -> do
-  let dlqBody = mkDlqPayload msg reason includeMetadata
-  sendMessage (SendMessage dlqQueueName dlqBody Nothing)
-  deleteMessage (MessageQuery queueName msgId)
+AckDeadLetter reason -> case config.deadLetterConfig of
+  Nothing      -> archiveMessage (MessageQuery queueName msgId)
+  Just dlqConfig -> do
+    consumerHdrs <- currentTraceHeaders
+    deadLetterTransactionally env config dlqConfig msg reason
+      (mergeDlqHeaders consumerHdrs msg.headers)
 ```
+
+The target is selected from `dlqConfig.dlqTarget :: DeadLetterTarget`:
+
+- `DirectQueue queueName` — sends the DLQ copy to a specific queue (`sendMessage` / `sendMessageWithHeaders`).
+- `TopicRoute routingKey` — routes the DLQ copy by routing key (`sendTopic` / `sendTopicWithHeaders`).
+
+The consumer's current trace headers are merged into the DLQ message's headers via `mergeDlqHeaders`: the consumer's active `traceparent`/`tracestate` take the active slot, and the original message's `traceparent`/`tracestate` (if present) are preserved under `x-shibuya-upstream-traceparent` / `x-shibuya-upstream-tracestate`. When there is no active span the original headers are forwarded verbatim. When headers are present the `*WithHeaders` statement variants are used; otherwise the plain variants.
 
 DLQ payload structure:
 ```json
@@ -232,14 +272,15 @@ DLQ payload structure:
 
 ```haskell
 AckHalt _reason ->
-  changeVisibilityTimeout $ VisibilityTimeoutQuery
-    { queueName = queueName,
-      messageId = msgId,
-      visibilityTimeoutOffset = 3600  -- 1 hour
-    }
+  let vtSeconds = maybe config.visibilityTimeout id config.haltVisibilityTimeout
+   in changeVisibilityTimeout $ VisibilityTimeoutQuery
+        { queueName = queueName,
+          messageId = msgId,
+          visibilityTimeoutOffset = vtSeconds
+        }
 ```
 
-Message is made invisible for 1 hour. When the processor restarts, the message becomes visible and can be retried.
+The message is parked by reassigning its visibility timeout. The parking duration is **configurable**: it uses `haltVisibilityTimeout` when set, otherwise falls back to `visibilityTimeout` (there is no hardcoded 1-hour offset). After that many seconds the message becomes visible to any consumer again, independent of restart. See Design Decision #7 ("AckHalt Uses Configurable VT Extension").
 
 ## Polling Strategies
 

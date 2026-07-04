@@ -90,6 +90,7 @@ defaultConfig :: QueueName -> PgmqAdapterConfig
 -- haltVisibilityTimeout = Nothing
 -- maxRetries = 3
 -- fifoConfig = Nothing
+-- prefetchConfig = Nothing
 ```
 
 Override fields as needed:

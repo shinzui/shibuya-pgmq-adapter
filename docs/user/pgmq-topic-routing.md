@@ -57,7 +57,7 @@ unbindQueueTopics errorLogsQueue [errorPattern]
 ```haskell
 bindings <- listQueueTopicBindings allLogsQueue
 -- bindings :: [TopicBinding]
--- Each TopicBinding has: pattern, queueName, boundAt, compiledRegex
+-- Each TopicBinding has: bindingPattern, bindingQueueName, bindingBoundAt, bindingCompiledRegex
 ```
 
 ### Testing Routing
@@ -68,7 +68,7 @@ Dry-run to see which queues a routing key would match, without sending any messa
 let Right key = parseRoutingKey "logs.error"
 matches <- testTopicRouting key
 -- matches :: [RoutingMatch]
--- Each RoutingMatch has: pattern, queueName, compiledRegex
+-- Each RoutingMatch has: matchPattern, matchQueueName, matchCompiledRegex
 ```
 
 ## Example: Event Fan-Out
@@ -110,8 +110,8 @@ Topics can be used for dead-letter routing. See [Dead-Letter Queues](./pgmq-dead
 ### Parsing Functions
 
 ```haskell
-parseRoutingKey   :: Text -> Either Text RoutingKey
-parseTopicPattern :: Text -> Either Text TopicPattern
+parseRoutingKey   :: Text -> Either PgmqError RoutingKey
+parseTopicPattern :: Text -> Either PgmqError TopicPattern
 ```
 
 ### Display Functions
@@ -125,16 +125,16 @@ topicPatternToText :: TopicPattern -> Text
 
 ```haskell
 data TopicBinding = TopicBinding
-  { pattern       :: Text
-  , queueName     :: Text
-  , boundAt       :: UTCTime
-  , compiledRegex :: Text
+  { bindingPattern       :: TopicPattern
+  , bindingQueueName     :: Text
+  , bindingBoundAt       :: UTCTime
+  , bindingCompiledRegex :: Text
   }
 
 data RoutingMatch = RoutingMatch
-  { pattern       :: Text
-  , queueName     :: Text
-  , compiledRegex :: Text
+  { matchPattern       :: TopicPattern
+  , matchQueueName     :: Text
+  , matchCompiledRegex :: Text
   }
 ```
 
