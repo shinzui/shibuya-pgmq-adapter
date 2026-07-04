@@ -325,6 +325,8 @@ Shutdown flow:
 
 Messages in-flight are processed to completion. Messages not yet polled remain in pgmq.
 
+**Prefetch exception (no data loss).** When `prefetchConfig` is enabled, the polling stage buffers batches ahead of the shutdown gate. On shutdown, up to `bufferSize × batchSize` already-read messages may be sitting in that buffer and are *not* released promptly by step 3. This does **not** lose messages: a pgmq read only sets a visibility timeout, it never deletes, so those messages stay in the queue and pgmq redelivers them once their visibility timeout expires. The only effect is that their redelivery is *delayed* by up to `visibilityTimeout` seconds after a shutdown — a bounded, at-least-once-safe edge case inherent to reading ahead. See “Concurrent Prefetch” below.
+
 ## Design Decisions
 
 ### 1. Effect Integration
@@ -365,11 +367,15 @@ Messages in-flight are processed to completion. Messages not yet polled remain i
 
 **Rationale**: Some applications prefer archiving over separate DLQ. Flexibility for different use cases.
 
-### 6. Removed Lookaheading
+### 6. Concurrent Prefetch (opt-in)
 
-**Decision**: Concurrent lookaheading was removed from the public adapter API.
+**Decision**: Concurrent prefetch is available via `prefetchConfig` (default `Nothing` = disabled). When enabled, the polling stage runs on a Streamly `parBuffered` worker so the next batches are read while the current messages are processed.
 
-**Rationale**: The previous Streamly `parBuffered` implementation could deadlock under the adapter's effect stack and let message visibility timeouts tick while buffered.
+**Rationale / history**: An earlier `parBuffered` implementation deadlocked under the adapter's effect stack (`thread blocked indefinitely in an STM transaction`). The root cause is not Streamly: `parBuffered` forks worker threads that must unlift `Eff`, and effectful's default `SeqUnlift` strategy throws when its unlift runs off-thread. The fix runs *only the prefetch stage* under `ConcUnlift`, scoped locally via `morphInner (withUnliftStrategy (ConcUnlift Ephemeral Unlimited))`, so the non-prefetch path is unchanged (still `SeqUnlift`, no overhead).
+
+**Trade-offs**:
+- Prefetched messages have their visibility timeout ticking while buffered. Ensure `bufferSize × batchSize × avgProcessingTime < visibilityTimeout`.
+- **Shutdown (no data loss)**: a shutdown can strand up to `bufferSize × batchSize` buffered messages invisible until their VT expires (see “Shutdown Handling” above). No messages are lost — they are redelivered after the visibility timeout; only redelivery is delayed. This bounded, at-least-once-safe behaviour is accepted and documented rather than engineered away, because the strand is intrinsic to reading ahead.
 
 ### 7. AckHalt Uses Configurable VT Extension
 

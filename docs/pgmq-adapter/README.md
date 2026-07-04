@@ -148,6 +148,28 @@ let config = (defaultConfig queueName)
       }
 ```
 
+### With Concurrent Prefetch (opt-in)
+
+Prefetch reads the next batches on a background worker while the current
+messages are processed, overlapping database latency with handler work.
+
+```haskell
+let config = (defaultConfig queueName)
+      { prefetchConfig = Just defaultPrefetchConfig  -- buffers 4 batches ahead
+      }
+```
+
+Trade-offs:
+
+- Prefetched messages have their visibility timeout ticking while buffered, so
+  keep `bufferSize * batchSize * avgProcessingTime < visibilityTimeout`.
+- **Shutdown (no data loss).** A shutdown can leave up to `bufferSize * batchSize`
+  already-read messages invisible until their visibility timeout expires. No
+  messages are lost — pgmq redelivers them once the VT elapses; only redelivery
+  is delayed. This bounded, at-least-once-safe edge case is inherent to reading
+  ahead. Leave `prefetchConfig = Nothing` (the default) if prompt shutdown
+  release matters more than polling latency.
+
 ## Features
 
 | Feature | Description |
@@ -159,6 +181,7 @@ let config = (defaultConfig queueName)
 | **Automatic Retry** | Uses pgmq's `readCount` to track and limit retries |
 | **Dead-Letter Queue** | Optional DLQ with configurable metadata inclusion |
 | **FIFO Ordering** | Grouped message processing with pgmq 1.8.0+ |
+| **Concurrent Prefetch** | Opt-in read-ahead of batches under a scoped `ConcUnlift` strategy (no data loss on shutdown) |
 | **Graceful Shutdown** | Stops polling while allowing in-flight messages to complete |
 
 ## Requirements

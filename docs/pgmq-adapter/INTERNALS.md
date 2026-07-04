@@ -331,6 +331,26 @@ pollFifo fifo = case config.polling of
         readGroupedRoundRobinWithPoll (mkReadGroupedWithPoll config maxSec intervalMs)
 ```
 
+### pgmqChunksPrefetch
+
+When `prefetchConfig` is set, `pgmqSourceWithShutdown` swaps `pgmqChunks` for
+`pgmqChunksPrefetch`, which wraps the poll loop in Streamly's `parBuffered` so
+batches are read on a background worker:
+
+```haskell
+pgmqChunksPrefetch prefetchSettings config =
+  pgmqChunks config
+    & StreamP.parBuffered prefetchSettings
+    & Stream.morphInner (withUnliftStrategy (ConcUnlift Ephemeral Unlimited))
+```
+
+`parBuffered` forks worker threads that must unlift `Eff` to `IO`. effectful's
+default `SeqUnlift` throws when its unlift runs off-thread (the historical
+prefetch deadlock), so the concurrent stage is wrapped — via `morphInner`, so the
+override is in force at the moment `parBuffered` forks — in a locally-scoped
+`ConcUnlift` strategy. Because the scope is local to this stage, the non-prefetch
+source path continues to run under `SeqUnlift` unchanged.
+
 ### Batch Flattening
 
 ```haskell

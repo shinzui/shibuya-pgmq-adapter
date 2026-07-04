@@ -99,6 +99,41 @@ The PGMQ adapter always provides a lease. Extending the lease uses pgmq's absolu
 | Bursty | LongPolling with short max |
 | High throughput | StandardPolling (10-50ms) |
 
+## Concurrent Prefetch (opt-in)
+
+Prefetch reads the next batches on a background worker while the current
+messages are processed, overlapping database latency with handler work. It is
+disabled by default.
+
+```haskell
+let config = (defaultConfig queueName)
+      { prefetchConfig = Just defaultPrefetchConfig  -- bufferSize = 4 batches
+      }
+```
+
+When to enable it: latency-sensitive workloads where the poll round-trip is a
+meaningful fraction of per-message time. When to leave it off: when prompt
+release of read-but-unprocessed messages at shutdown matters (see below), or
+when handlers are slow relative to the visibility timeout.
+
+Tuning: keep `bufferSize * batchSize * avgProcessingTime < visibilityTimeout`,
+otherwise buffered messages can have their visibility timeout expire before they
+are handled and be redelivered mid-run.
+
+**Shutdown behaviour — no data loss.** Because prefetch reads ahead, a shutdown
+can leave up to `bufferSize * batchSize` already-read messages sitting in the
+buffer, invisible until their visibility timeout expires. Unlike the
+non-prefetch path (which releases just-read, undispatched messages immediately),
+these are not released promptly. **No messages are lost** — a pgmq read only sets
+a visibility timeout and never deletes, so pgmq redelivers them once the timeout
+elapses; the only effect is that their redelivery is *delayed* by up to
+`visibilityTimeout` seconds after a shutdown. This is a bounded, at-least-once-safe
+edge case inherent to reading ahead.
+
+Implementation note: prefetch uses Streamly's `parBuffered` under a
+locally-scoped effectful `ConcUnlift` strategy so the worker threads can unlift
+`Eff` safely; the non-prefetch path is unchanged.
+
 ## Configuration Examples
 
 ### High-Throughput Processing

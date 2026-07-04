@@ -79,6 +79,7 @@ module Shibuya.Adapter.Pgmq
     PgmqConfigError (..),
     PollingConfig (..),
     PollRetryConfig (..),
+    PrefetchConfig (..),
     DeadLetterConfig (..),
     DeadLetterTarget (..),
     FifoConfig (..),
@@ -93,6 +94,7 @@ module Shibuya.Adapter.Pgmq
     defaultConfig,
     defaultPollingConfig,
     defaultPollRetryConfig,
+    defaultPrefetchConfig,
 
     -- * Topic Management (pgmq 1.11.0+)
     bindQueueTopics,
@@ -153,19 +155,22 @@ import Shibuya.Adapter.Pgmq.Config
     PgmqConfigError (..),
     PollRetryConfig (..),
     PollingConfig (..),
+    PrefetchConfig (..),
     defaultConfig,
     defaultPollRetryConfig,
     defaultPollingConfig,
+    defaultPrefetchConfig,
     directDeadLetter,
     mkPgmqAdapterEnv,
     topicDeadLetter,
     validateConfig,
   )
-import Shibuya.Adapter.Pgmq.Internal (mkIngested, pgmqChunks, releaseMessages)
+import Shibuya.Adapter.Pgmq.Internal (mkIngested, pgmqChunks, pgmqChunksPrefetch, releaseMessages)
 import Shibuya.Core.Ingested (Ingested)
 import Shibuya.Telemetry.Effect (Tracing)
 import Streamly.Data.Stream (Stream)
 import Streamly.Data.Stream qualified as Stream
+import Streamly.Data.Stream.Prelude qualified as StreamP
 import Streamly.Data.Unfold qualified as Unfold
 
 -- | Create a PGMQ adapter with the given configuration.
@@ -221,12 +226,21 @@ pgmqSourceWithShutdown ::
   TVar Bool ->
   Stream (Eff es) (Ingested es Value)
 pgmqSourceWithShutdown env config shutdownVar =
-  pgmqChunks config
+  chunkStream
     & Stream.filter (not . Vector.null)
     & Stream.takeWhileM keepChunk
     & Stream.unfoldEach (Unfold.unfoldr Vector.uncons)
     & Stream.mapMaybeM (mkIngested env config)
   where
+    -- Only the polling stage is prefetched (and only under a locally-scoped
+    -- ConcUnlift, see 'pgmqChunksPrefetch'). The shutdown gate, flatten, and
+    -- 'mkIngested'/finalization stages stay on the consumer thread. When
+    -- prefetch is disabled the stream is exactly 'pgmqChunks config', running
+    -- under the default SeqUnlift strategy with no added overhead.
+    chunkStream = case config.prefetchConfig of
+      Nothing -> pgmqChunks config
+      Just prefetch ->
+        pgmqChunksPrefetch (StreamP.maxBuffer (fromIntegral prefetch.bufferSize)) config
     keepChunk chunk = do
       isShutdown <- liftIO $ readTVarIO shutdownVar
       if isShutdown

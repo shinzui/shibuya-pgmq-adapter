@@ -4,6 +4,7 @@ module Shibuya.Adapter.Pgmq.Internal
   ( -- * Stream Construction
     pgmqSource,
     pgmqChunks,
+    pgmqChunksPrefetch,
     pgmqMessages,
     releaseMessages,
 
@@ -45,7 +46,15 @@ import Data.Text.Encoding qualified as TE
 import Data.Time (NominalDiffTime, addUTCTime, getCurrentTime, nominalDiffTimeToSeconds)
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-import Effectful (Eff, IOE, (:>))
+import Effectful
+  ( Eff,
+    IOE,
+    Limit (..),
+    Persistence (..),
+    UnliftStrategy (..),
+    withUnliftStrategy,
+    (:>),
+  )
 import Effectful.Error.Static (Error, catchError, throwError)
 import Hasql.Pool qualified as Pool
 import Hasql.Transaction qualified as Transaction
@@ -104,6 +113,7 @@ import Shibuya.Telemetry.Effect (Tracing)
 import Shibuya.Telemetry.Propagation (currentTraceHeaders)
 import Streamly.Data.Stream (Stream)
 import Streamly.Data.Stream qualified as Stream
+import Streamly.Data.Stream.Prelude qualified as StreamP
 import Streamly.Data.Unfold qualified as Unfold
 
 -- | Convert 'NominalDiffTime' to seconds as 'Int32', saturating at the
@@ -467,6 +477,31 @@ pgmqChunks config = Stream.repeatM (retryingTransient config.pollRetry poll)
 
     nominalToMicros :: NominalDiffTime -> Int
     nominalToMicros t = floor (nominalDiffTimeToSeconds t * 1_000_000)
+
+-- | Chunk polling with concurrent prefetch.
+--
+-- Wraps 'pgmqChunks' in streamly's @parBuffered@ so the next batches are polled
+-- on a background worker while the current messages are processed. @parBuffered@
+-- forks worker threads that must unlift @Eff es@ to @IO@; effectful's default
+-- 'SeqUnlift' strategy throws when its unlift runs off-thread, which is the
+-- historical prefetch deadlock. We therefore run the concurrent portion under
+-- 'ConcUnlift' (which clones the effect environment per worker thread), scoped
+-- locally with 'withUnliftStrategy' via 'Stream.morphInner' so the override is
+-- in force at the moment @parBuffered@ forks — and so it does /not/ leak to the
+-- non-prefetch path, which keeps running under 'SeqUnlift'.
+--
+-- 'Stream.morphInner' is applied /after/ @parBuffered@ so it wraps @parBuffered@'s
+-- own forking step. Scoping the strategy at stream-construction time instead
+-- would not work: the fork happens when the stream is run, not when it is built.
+pgmqChunksPrefetch ::
+  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es) =>
+  (StreamP.Config -> StreamP.Config) ->
+  PgmqAdapterConfig ->
+  Stream (Eff es) (Vector Pgmq.Message)
+pgmqChunksPrefetch prefetchSettings config =
+  pgmqChunks config
+    & StreamP.parBuffered prefetchSettings
+    & Stream.morphInner (withUnliftStrategy (ConcUnlift Ephemeral Unlimited))
 
 retryingTransient ::
   (Error PgmqRuntimeError :> es, IOE :> es) =>

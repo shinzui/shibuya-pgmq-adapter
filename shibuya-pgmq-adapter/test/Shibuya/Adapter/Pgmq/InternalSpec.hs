@@ -96,7 +96,8 @@ mkReadMessageSpec = describe "mkReadMessage" $ do
             deadLetterConfig = Nothing,
             haltVisibilityTimeout = Nothing,
             maxRetries = 3,
-            fifoConfig = Nothing
+            fifoConfig = Nothing,
+            prefetchConfig = Nothing
           }
       ReadMessage
         { queueName = queryQueueName,
@@ -134,7 +135,8 @@ mkReadWithPollSpec = describe "mkReadWithPoll" $ do
             deadLetterConfig = Nothing,
             haltVisibilityTimeout = Nothing,
             maxRetries = 3,
-            fifoConfig = Nothing
+            fifoConfig = Nothing,
+            prefetchConfig = Nothing
           }
       ReadWithPollMessage
         { queueName = queryQueueName,
@@ -180,7 +182,8 @@ mkReadGroupedSpec = describe "mkReadGrouped" $ do
             deadLetterConfig = Nothing,
             haltVisibilityTimeout = Nothing,
             maxRetries = 3,
-            fifoConfig = Nothing
+            fifoConfig = Nothing,
+            prefetchConfig = Nothing
           }
       ReadGrouped
         { queueName = queryQueueName,
@@ -368,7 +371,8 @@ retryTestConfig attempts =
           deadLetterConfig = Nothing,
           haltVisibilityTimeout = Nothing,
           maxRetries = 3,
-          fifoConfig = Nothing
+          fifoConfig = Nothing,
+          prefetchConfig = Nothing
         }
 
 runStubPgmq ::

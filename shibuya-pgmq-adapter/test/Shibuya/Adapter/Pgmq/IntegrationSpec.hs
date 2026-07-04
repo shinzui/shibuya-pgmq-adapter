@@ -316,7 +316,8 @@ _mkConfig queueName =
       deadLetterConfig = Nothing,
       haltVisibilityTimeout = Nothing,
       maxRetries = 3,
-      fifoConfig = Nothing
+      fifoConfig = Nothing,
+      prefetchConfig = Nothing
     }
 
 -- | Create config with custom batch size
@@ -332,5 +333,6 @@ _mkConfigWithBatchSize qName bs =
       deadLetterConfig = Nothing,
       haltVisibilityTimeout = Nothing,
       maxRetries = 3,
-      fifoConfig = Nothing
+      fifoConfig = Nothing,
+      prefetchConfig = Nothing
     }

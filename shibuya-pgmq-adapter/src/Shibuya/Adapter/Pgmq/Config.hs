@@ -11,6 +11,10 @@ module Shibuya.Adapter.Pgmq.Config
     PollingConfig (..),
     PollRetryConfig (..),
 
+    -- * Prefetch Configuration
+    PrefetchConfig (..),
+    defaultPrefetchConfig,
+
     -- * Dead-Letter Queue Configuration
     DeadLetterConfig (..),
     DeadLetterTarget (..),
@@ -34,6 +38,7 @@ import Data.Int (Int32, Int64)
 import Data.Time (NominalDiffTime)
 import GHC.Generics (Generic)
 import Hasql.Pool qualified as Pool
+import Numeric.Natural (Natural)
 import Pgmq.Effectful (PgmqRuntimeError)
 import Pgmq.Types (QueueName, RoutingKey)
 import Pgmq.Types qualified as Pgmq
@@ -82,7 +87,19 @@ data PgmqAdapterConfig = PgmqAdapterConfig
     -- message before processing.
     maxRetries :: !Int64,
     -- | Optional FIFO mode configuration.
-    fifoConfig :: !(Maybe FifoConfig)
+    fifoConfig :: !(Maybe FifoConfig),
+    -- | Optional concurrent prefetch configuration.
+    --
+    -- When 'Just', the polling stage runs on a background worker under
+    -- effectful's 'ConcUnlift' strategy so streamly's @parBuffered@ may unlift
+    -- 'Eff' off-thread (see "Shibuya.Adapter.Pgmq.Internal".@pgmqChunksPrefetch@).
+    -- When 'Nothing' (the default), the source runs on the default 'SeqUnlift'
+    -- strategy with no added overhead.
+    --
+    -- See 'PrefetchConfig' for the visibility-timeout trade-off and the bounded,
+    -- loss-free shutdown behaviour (buffered messages are redelivered after
+    -- their visibility timeout rather than released immediately).
+    prefetchConfig :: !(Maybe PrefetchConfig)
   }
   deriving stock (Show, Eq, Generic)
 
@@ -99,6 +116,7 @@ data PgmqConfigError
   | InvalidPollRetryBackoff !NominalDiffTime !NominalDiffTime
   | InvalidAckRetryMaxAttempts !Int
   | InvalidAckRetryBackoff !NominalDiffTime !NominalDiffTime
+  | InvalidPrefetchBufferSize !Natural
   deriving stock (Show, Eq, Generic)
 
 -- | Validate adapter configuration before starting a source stream.
@@ -108,6 +126,9 @@ validateConfig config
   | config.visibilityTimeout < 1 = Left (InvalidVisibilityTimeout config.visibilityTimeout)
   | Just halt <- config.haltVisibilityTimeout, halt < 1 = Left (InvalidHaltVisibilityTimeout halt)
   | config.maxRetries < 0 = Left (InvalidMaxRetries config.maxRetries)
+  | Just prefetch <- config.prefetchConfig,
+    prefetch.bufferSize == 0 =
+      Left (InvalidPrefetchBufferSize prefetch.bufferSize)
   | otherwise = do
       validatePolling config.polling
       validateRetry InvalidPollRetryMaxAttempts InvalidPollRetryBackoff config.pollRetry
@@ -137,6 +158,39 @@ data PollRetryConfig = PollRetryConfig
     initialBackoff :: !NominalDiffTime,
     -- | Maximum delay between retry attempts.
     maxBackoff :: !NominalDiffTime
+  }
+  deriving stock (Show, Eq, Generic)
+
+-- | Configuration for concurrent prefetch.
+--
+-- When enabled, the polling stage buffers the next batches on a background
+-- worker while the current messages are being processed, overlapping database
+-- latency with handler work.
+--
+-- Trade-off: prefetched messages have their visibility timeout ticking while
+-- buffered, so ensure
+-- @bufferSize * batchSize * avgProcessingTime < visibilityTimeout@.
+--
+-- === Shutdown behaviour (no data loss)
+--
+-- Because prefetch reads message batches /ahead/ of processing, a shutdown can
+-- leave up to @bufferSize * batchSize@ already-read messages sitting in the
+-- prefetch buffer without being handed to a handler. Unlike the non-prefetch
+-- path — which releases just-read, undispatched messages immediately on
+-- shutdown — these buffered messages are not released promptly.
+--
+-- __No messages are lost.__ A pgmq read only sets a message's visibility
+-- timeout; it never deletes the message. Any message that was read but not
+-- acknowledged stays in the queue and pgmq redelivers it once its visibility
+-- timeout expires. The only effect is that, after a shutdown, redelivery of
+-- those buffered messages is /delayed/ by up to 'visibilityTimeout' seconds.
+-- This is a bounded, at-least-once-safe edge case (delayed processing, not data
+-- loss), inherent to reading ahead; it is verified by the adapter's test suite.
+data PrefetchConfig = PrefetchConfig
+  { -- | Number of batches to buffer ahead of consumption (default: 4).
+    -- Higher values reduce latency but increase visibility-timeout pressure.
+    -- Must be greater than zero (rejected by 'validateConfig' otherwise).
+    bufferSize :: !Natural
   }
   deriving stock (Show, Eq, Generic)
 
@@ -217,6 +271,10 @@ defaultPollRetryConfig =
       maxBackoff = 5
     }
 
+-- | Default prefetch configuration: buffers 4 batches ahead.
+defaultPrefetchConfig :: PrefetchConfig
+defaultPrefetchConfig = PrefetchConfig {bufferSize = 4}
+
 -- | Default adapter configuration.
 defaultConfig :: QueueName -> PgmqAdapterConfig
 defaultConfig name =
@@ -230,5 +288,6 @@ defaultConfig name =
       deadLetterConfig = Nothing,
       haltVisibilityTimeout = Nothing,
       maxRetries = 3,
-      fifoConfig = Nothing
+      fifoConfig = Nothing,
+      prefetchConfig = Nothing
     }

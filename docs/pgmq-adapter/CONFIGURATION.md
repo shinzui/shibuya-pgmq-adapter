@@ -27,7 +27,8 @@ data PgmqAdapterConfig = PgmqAdapterConfig
     deadLetterConfig :: !(Maybe DeadLetterConfig),
     haltVisibilityTimeout :: !(Maybe Int32),
     maxRetries :: !Int64,
-    fifoConfig :: !(Maybe FifoConfig)
+    fifoConfig :: !(Maybe FifoConfig),
+    prefetchConfig :: !(Maybe PrefetchConfig)
   }
 ```
 
@@ -45,6 +46,7 @@ data PgmqAdapterConfig = PgmqAdapterConfig
 | `haltVisibilityTimeout` | `Maybe Int32` | `Nothing` | Visibility timeout used for `AckHalt`; falls back to `visibilityTimeout`. |
 | `maxRetries` | `Int64` | 3 | Maximum deliveries before auto dead-lettering. |
 | `fifoConfig` | `Maybe FifoConfig` | `Nothing` | Optional FIFO ordering configuration. |
+| `prefetchConfig` | `Maybe PrefetchConfig` | `Nothing` | Optional concurrent prefetch (read-ahead). See below. |
 
 ### queueName
 
@@ -87,6 +89,39 @@ Based on pgmq's `readCount` field, which counts deliveries, not handler failures
 3. No manual retry tracking needed
 
 Set to 0 only when you intentionally want to drain the queue into the DLQ/archive before handlers see messages. pgmq increments `readCount` on first delivery, so `maxRetries = 0` auto-dead-letters every delivered message.
+
+### prefetchConfig
+
+Optional concurrent prefetch. When set to `Just`, the polling stage reads the
+next batches on a background worker while the current messages are processed,
+overlapping database latency with handler work.
+
+```haskell
+data PrefetchConfig = PrefetchConfig
+  { bufferSize :: !Natural  -- number of batches to buffer ahead (default 4)
+  }
+
+defaultPrefetchConfig :: PrefetchConfig  -- bufferSize = 4
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `bufferSize` | `Natural` | 4 | Batches to buffer ahead. Must be `> 0` (rejected by `validateConfig`). |
+
+Implementation note: prefetch uses Streamly's `parBuffered`, which forks worker
+threads that must unlift `Eff`. To avoid effectful's default `SeqUnlift` throwing
+off-thread (the historical prefetch deadlock), the prefetch stage runs under a
+locally-scoped `ConcUnlift` strategy. The non-prefetch path is unaffected.
+
+Trade-offs:
+
+- Prefetched messages have their visibility timeout ticking while buffered.
+  Keep `bufferSize * batchSize * avgProcessingTime < visibilityTimeout`.
+- **Shutdown (no data loss).** A shutdown can leave up to `bufferSize * batchSize`
+  already-read messages invisible until their visibility timeout expires. No
+  messages are lost — pgmq redelivers them after the VT; only redelivery is
+  delayed. Leave `prefetchConfig = Nothing` (the default) if prompt shutdown
+  release matters more than polling latency.
 
 ## PollingConfig
 
@@ -305,7 +340,8 @@ defaultConfig name = PgmqAdapterConfig
     deadLetterConfig = Nothing,
     haltVisibilityTimeout = Nothing,
     maxRetries = 3,
-    fifoConfig = Nothing
+    fifoConfig = Nothing,
+    prefetchConfig = Nothing
   }
 ```
 

@@ -15,6 +15,7 @@ import Control.Monad (forM_)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import Data.Int (Int32)
 import Data.Text qualified as Text
 import Data.Vector qualified as Vector
 import Effectful (Eff, IOE, liftIO, runEff, (:>))
@@ -24,12 +25,14 @@ import Pgmq.Effectful (Pgmq, PgmqRuntimeError, runPgmq)
 import Pgmq.Effectful qualified as PgmqEff
 import Pgmq.Hasql.Sessions qualified as Sessions
 import Pgmq.Hasql.Statements.Types (ReadMessage (..), SendMessage (..), SendMessageWithHeaders (..))
-import Pgmq.Types (MessageBody (..), MessageHeaders (..))
+import Pgmq.Types (MessageBody (..), MessageHeaders (..), QueueName)
 import Shibuya.Adapter (Adapter)
 import Shibuya.Adapter.Pgmq
   ( PgmqAdapterConfig (..),
     PollingConfig (..),
+    PrefetchConfig (..),
     defaultConfig,
+    defaultPrefetchConfig,
     directDeadLetter,
     mkPgmqAdapterEnv,
     pgmqAdapter,
@@ -49,6 +52,7 @@ import Shibuya.Handler (Handler)
 import Shibuya.Runner.Metrics (ProcessorId (..))
 import Shibuya.Telemetry.Effect (Tracing, runTracingNoop)
 import System.Environment (lookupEnv)
+import System.Timeout (timeout)
 import Test.Hspec
 import TmpPostgres (TestFixture (..), runPgmqSession, withPgmqDb, withTestFixture)
 
@@ -59,6 +63,7 @@ spec = do
       poisonMessageSpec
       longHandlerSpec
       gracefulShutdownSpec
+      prefetchSpec
 
 -- | Wrapper to run tests with a temporary database and fixture
 withTempDbFixture :: (TestFixture -> IO ()) -> IO ()
@@ -608,6 +613,219 @@ gracefulShutdownSpec = describe "Graceful shutdown" $ do
     remaining `shouldSatisfy` (>= 0) -- Just ensure no crash
 
 --------------------------------------------------------------------------------
+-- Prefetch Tests (scoped ConcUnlift)
+--------------------------------------------------------------------------------
+
+-- | Regression test for the historical prefetch deadlock.
+--
+-- With @prefetchConfig = Just ...@ the polling stage runs on a streamly
+-- @parBuffered@ worker thread that must unlift @Eff@. Under effectful's default
+-- 'SeqUnlift' this deadlocks ("thread blocked indefinitely in an STM
+-- transaction"); the adapter now scopes the concurrent stage to 'ConcUnlift'
+-- (see 'Shibuya.Adapter.Pgmq.Internal.pgmqChunksPrefetch').
+--
+-- Acceptance is behavioral: the queue drains to completion within a timeout. If
+-- the deadlock were present the 'timeout' fires and the test fails instead of
+-- hanging the suite. Stripping the @morphInner (withUnliftStrategy ...)@ wrapper
+-- from 'pgmqChunksPrefetch' makes this test fail (verified during M2).
+prefetchSpec :: SpecWith TestFixture
+prefetchSpec = describe "Prefetch" $ do
+  it "drains the queue under concurrent prefetch without deadlocking" $ \TestFixture {pool, queueName, dlqName = _} -> do
+    let total = 50 :: Int
+    forM_ [1 .. total] $ \i ->
+      runPgmqSession pool $ do
+        _ <-
+          Sessions.sendMessage $
+            SendMessage
+              { queueName = queueName,
+                messageBody = MessageBody (String $ Text.pack ("prefetch-" <> show i)),
+                delay = Just 0
+              }
+        pure ()
+
+    processedRef <- newIORef (0 :: Int)
+
+    let config =
+          (defaultConfig queueName)
+            { visibilityTimeout = 30,
+              batchSize = 5,
+              polling = StandardPolling {pollInterval = 0.05},
+              prefetchConfig = Just defaultPrefetchConfig
+            }
+
+    -- Guard against a hang: a deadlock makes 'timeout' return Nothing and the
+    -- test fails, rather than blocking the whole suite indefinitely.
+    result <- timeout 30_000_000 $ runAdapterIO pool $ runTracingNoop $ do
+      adapter <- requireAdapter pool config
+      let handler = countingHandler processedRef
+          processor = mkProcessor adapter handler
+      appResult <- runApp IgnoreFailures 100 [(ProcessorId "prefetch-test", processor)]
+      case appResult of
+        Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
+        Right appHandle -> do
+          liftIO $ waitForProcessed processedRef total 20_000_000
+          let shutdownConfig = ShutdownConfig {drainTimeout = 5}
+          _ <- stopAppGracefully shutdownConfig appHandle
+          pure ()
+
+    case result of
+      Nothing ->
+        expectationFailure
+          "Prefetch run timed out — likely the parBuffered/effectful STM deadlock"
+      Just () -> pure ()
+
+    processed <- readIORef processedRef
+    processed `shouldBe` total
+
+    -- All processed messages were AckOk'd, so the source queue is drained.
+    remaining <-
+      runPgmqSession pool $ do
+        msgs <-
+          Sessions.readMessage $
+            ReadMessage
+              { queueName = queueName,
+                delay = 30,
+                batchSize = Just 100,
+                conditional = Nothing
+              }
+        pure $ Vector.length msgs
+    remaining `shouldBe` 0
+
+  -- Differential shutdown-release measurement: does prefetch hold messages
+  -- invisible at shutdown that the non-prefetch path would release?
+  --
+  -- 'parBuffered' buffers chunks upstream of the EP-27 shutdown gate
+  -- ('takeWhileM'/'releaseMessages'). On shutdown the gate releases only the
+  -- chunk it pulls next, so chunks still sitting in the parBuffered buffer may
+  -- never reach 'releaseMessages' and stay invisible until their VT expires.
+  --
+  -- The metric @held = total - processed - visibleImmediatelyAfterShutdown@
+  -- counts messages left invisible in the queue (inbox residual + any buffer
+  -- leak); it cancels out never-read and deleted messages. We run the identical
+  -- scenario with prefetch OFF (on the main queue) and ON (on the DLQ queue,
+  -- reused here as an independent second queue) and compare.
+  it "strands only a bounded (<= one prefetch buffer) number of extra messages invisible on shutdown" $ \TestFixture {pool, queueName, dlqName} -> do
+    (totalOff, procOff, visOff) <- liftIO $ measureShutdownRelease pool queueName Nothing
+    (totalOn, procOn, visOn) <- liftIO $ measureShutdownRelease pool dlqName (Just defaultPrefetchConfig)
+
+    let heldOff = totalOff - procOff - visOff
+        heldOn = totalOn - procOn - visOn
+
+    liftIO $
+      putStrLn $
+        "PREFETCH-SHUTDOWN-DIAG: off(total="
+          <> show totalOff
+          <> " processed="
+          <> show procOff
+          <> " visible="
+          <> show visOff
+          <> " held="
+          <> show heldOff
+          <> ") on(total="
+          <> show totalOn
+          <> " processed="
+          <> show procOn
+          <> " visible="
+          <> show visOn
+          <> " held="
+          <> show heldOn
+          <> ")"
+
+    -- ACCEPTED, DOCUMENTED behaviour (M3 decision, 2026-07-04): prefetch strands
+    -- up to bufferSize*batchSize extra messages invisible on shutdown, because
+    -- 'parBuffered' buffers chunks upstream of the shutdown gate and only the
+    -- chunk the gate pulls next is released. This is bounded and loss-free (the
+    -- messages are redelivered after their VT — proven by the "loses no messages
+    -- under prefetch" test), and is documented in the 'PrefetchConfig' Haddock
+    -- and the adapter ARCHITECTURE docs.
+    --
+    -- This assertion is a regression guard on the *bound*, not the exact count:
+    -- the messages held invisible with prefetch must not exceed one full prefetch
+    -- buffer (bufferSize * batchSize) plus the ordinary core-inbox residual. An
+    -- unbounded leak (stranding most of the queue) would fail here. We bound
+    -- heldOn absolutely rather than (heldOn - heldOff), because the baseline's
+    -- inbox residual varies run to run (heldOff has been observed at 1–3). Config
+    -- under test: batchSize=2, defaultPrefetchConfig bufferSize=4, runApp inbox=2.
+    -- Measured numbers are on the PREFETCH-SHUTDOWN-DIAG line above.
+    let bufferBound = fromIntegral defaultPrefetchConfig.bufferSize * 2 -- bufferSize * batchSize
+        inboxResidualSlack = 6 -- generous allowance for the inbox=2 + in-flight residual
+    heldOn `shouldSatisfy` (<= bufferBound + inboxResidualSlack)
+
+  -- Proves the "accept and document" decision is safe: the shutdown strand
+  -- above delays redelivery but LOSES NOTHING. A blocking handler forces
+  -- messages to be read ahead into the prefetch buffer without ever being
+  -- acked; after shutdown and one visibility-timeout window, every message is
+  -- recoverable (processed + still-in-queue == total). This is the empirical
+  -- basis for the no-data-loss claim in the docs/Haddocks.
+  it "loses no messages under prefetch: stranded messages are all redelivered after the VT" $ \TestFixture {pool, queueName, dlqName = _} -> do
+    let total = 20 :: Int
+        vt = 4 :: Int32
+    forM_ [1 .. total] $ \i ->
+      runPgmqSession pool $ do
+        _ <-
+          Sessions.sendMessage $
+            SendMessage
+              { queueName = queueName,
+                messageBody = MessageBody (String $ Text.pack ("noloss-" <> show i)),
+                delay = Just 0
+              }
+        pure ()
+
+    processedRef <- newIORef (0 :: Int)
+
+    let config =
+          (defaultConfig queueName)
+            { visibilityTimeout = vt,
+              batchSize = 2,
+              polling = StandardPolling {pollInterval = 0.02},
+              prefetchConfig = Just defaultPrefetchConfig
+            }
+
+    -- Handler blocks for far longer than the test window, so messages are
+    -- read-ahead into the buffer/inbox but never acked before shutdown.
+    _ <- timeout 30_000_000 $ runAdapterIO pool $ runTracingNoop $ do
+      adapter <- requireAdapter pool config
+      let handler = slowHandler processedRef 10_000_000
+          processor = mkProcessor adapter handler
+      appResult <- runApp IgnoreFailures 2 [(ProcessorId "noloss-test", processor)]
+      case appResult of
+        Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
+        Right appHandle -> do
+          liftIO $ threadDelay 1_000_000 -- let the adapter read a few batches ahead
+          _ <- stopAppGracefully (ShutdownConfig {drainTimeout = 1}) appHandle
+          pure ()
+
+    processed <- readIORef processedRef
+
+    -- Wait past the visibility timeout so every read-but-stranded message
+    -- becomes visible again.
+    threadDelay (fromIntegral vt * 1_000_000 + 2_000_000)
+
+    recoverable <-
+      runPgmqSession pool $ do
+        msgs <-
+          Sessions.readMessage $
+            ReadMessage
+              { queueName = queueName,
+                delay = 30,
+                batchSize = Just 200,
+                conditional = Nothing
+              }
+        pure $ Vector.length msgs
+
+    liftIO $
+      putStrLn $
+        "PREFETCH-NOLOSS-DIAG: total="
+          <> show total
+          <> " processed="
+          <> show processed
+          <> " recoverableAfterVT="
+          <> show recoverable
+
+    -- No message is lost: everything not AckOk-deleted is back in the queue.
+    (processed + recoverable) `shouldBe` total
+
+--------------------------------------------------------------------------------
 -- Test Helpers
 --------------------------------------------------------------------------------
 
@@ -655,3 +873,60 @@ requireAdapter pool config = do
   case result of
     Left err -> liftIO $ error $ "Invalid PGMQ adapter config: " <> show err
     Right adapter -> pure adapter
+
+-- | Send a batch of messages, run a slow-handler processor against @q@ until a
+-- couple are processed, then shut down and measure how many messages remain in
+-- the queue but invisible. Returns @(total, processed, visibleAfterShutdown)@.
+--
+-- Parameters are chosen so 'parBuffered' can buffer several small chunks ahead
+-- of the shutdown gate: small @batchSize@, default @bufferSize@ (4), a slow
+-- handler, and a small inbox — so the buffer is non-empty at shutdown.
+measureShutdownRelease :: Pool.Pool -> QueueName -> Maybe PrefetchConfig -> IO (Int, Int, Int)
+measureShutdownRelease pool q mprefetch = do
+  let total = 40 :: Int
+  forM_ [1 .. total] $ \i ->
+    runPgmqSession pool $ do
+      _ <-
+        Sessions.sendMessage $
+          SendMessage
+            { queueName = q,
+              messageBody = MessageBody (String $ Text.pack ("shutdown-" <> show i)),
+              delay = Just 0
+            }
+      pure ()
+
+  processedRef <- newIORef (0 :: Int)
+
+  let config =
+        (defaultConfig q)
+          { visibilityTimeout = 30,
+            batchSize = 2,
+            polling = StandardPolling {pollInterval = 0.02},
+            prefetchConfig = mprefetch
+          }
+
+  _ <- timeout 30_000_000 $ runAdapterIO pool $ runTracingNoop $ do
+    adapter <- requireAdapter pool config
+    let handler = slowHandler processedRef 400000 -- 0.4s per message
+        processor = mkProcessor adapter handler
+    appResult <- runApp IgnoreFailures 2 [(ProcessorId "shutdown-measure", processor)]
+    case appResult of
+      Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
+      Right appHandle -> do
+        liftIO $ waitForProcessed processedRef 1 5_000_000
+        _ <- stopAppGracefully (ShutdownConfig {drainTimeout = 1}) appHandle
+        pure ()
+
+  processed <- readIORef processedRef
+  visibleNow <-
+    runPgmqSession pool $ do
+      msgs <-
+        Sessions.readMessage $
+          ReadMessage
+            { queueName = q,
+              delay = 30,
+              batchSize = Just 100,
+              conditional = Nothing
+            }
+      pure $ Vector.length msgs
+  pure (total, processed, visibleNow)

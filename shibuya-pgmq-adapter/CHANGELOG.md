@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.10.0.0 — 2026-07-04
+
+### Features
+
+- Reintroduced opt-in concurrent prefetch via `prefetchConfig :: Maybe PrefetchConfig`
+  (default `Nothing`). When enabled, the polling stage reads the next batches on a
+  background worker, overlapping database latency with handler work. The historical
+  `parBuffered` deadlock (`thread blocked indefinitely in an STM transaction`) is fixed
+  by running only the prefetch stage under effectful's `ConcUnlift` strategy (scoped via
+  `morphInner`), so the non-prefetch path is unchanged (still `SeqUnlift`, no overhead).
+
+### Breaking Changes
+
+- `PgmqAdapterConfig` gained a `prefetchConfig :: Maybe PrefetchConfig` field. Callers that
+  construct the config by full record literal must add it; `defaultConfig` sets it to `Nothing`.
+- `PgmqConfigError` gained an `InvalidPrefetchBufferSize` constructor; `validateConfig` now
+  rejects a prefetch `bufferSize` of `0`.
+
+### Notes
+
+- Shutdown with prefetch enabled can leave up to `bufferSize * batchSize` already-read
+  messages invisible until their visibility timeout expires. No messages are lost — they are
+  redelivered after the visibility timeout; only redelivery is delayed. This bounded,
+  at-least-once-safe behaviour is documented on `PrefetchConfig` and in the adapter
+  architecture docs.
+
 ## 0.9.0.0 — 2026-07-02
 
 ### Breaking Changes
