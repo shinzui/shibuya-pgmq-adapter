@@ -1,5 +1,7 @@
 # PGMQ Adapter Test Plan
 
+> Historical note: this document predates the 0.9.0.0 hardening work and still contains pre-0.9 API examples such as `pgmqAdapter config`, `QueueProcessor`, and the removed `lookaheadConfig` feature. Use the live test suite and the current configuration/API references for current behavior.
+
 This document provides a comprehensive test plan for the shibuya-pgmq-adapter, covering unit tests, property tests, integration tests, and performance benchmarks.
 
 ## Table of Contents

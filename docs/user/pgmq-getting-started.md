@@ -22,11 +22,13 @@ build-depends:
 ## Basic Consumer
 
 ```haskell
-import Shibuya.App (runApp, QueueProcessor (..), ProcessorId (..))
+import Shibuya.App (mkProcessor, runApp, stopApp)
+import Shibuya.Core.Types (ProcessorId (..))
 import Shibuya.Adapter.Pgmq
 import Pgmq.Effectful (runPgmq)
 import Hasql.Pool qualified as Pool
 import Effectful (runEff)
+import Effectful.Error.Static (runErrorNoCallStack)
 
 main :: IO ()
 main = do
@@ -40,13 +42,18 @@ main = do
   let config = defaultConfig queueName
 
   -- Run with effectful
-  runEff . runPgmq pool $ do
+  runResult <- runEff $ runErrorNoCallStack $ runPgmq pool $ do
+    let env = mkPgmqAdapterEnv pool
+
     -- Create adapter
-    adapter <- pgmqAdapter config
+    adapterResult <- pgmqAdapter env config
+    adapter <- case adapterResult of
+      Left err -> liftIO $ fail $ "Invalid PGMQ adapter config: " <> show err
+      Right adapter -> pure adapter
 
     -- Start Shibuya application
     result <- runApp IgnoreFailures 100
-      [ (ProcessorId "orders", QueueProcessor adapter handleOrder)
+      [ (ProcessorId "orders", mkProcessor adapter handleOrder)
       ]
 
     case result of
@@ -54,6 +61,10 @@ main = do
       Right handle -> do
         liftIO waitForShutdown
         stopApp handle
+
+  case runResult of
+    Left err -> print err
+    Right () -> pure ()
 
 handleOrder :: Handler es Value
 handleOrder ingested = do
@@ -73,10 +84,12 @@ defaultConfig :: QueueName -> PgmqAdapterConfig
 -- visibilityTimeout = 30 seconds
 -- batchSize = 1
 -- polling = StandardPolling (1 second)
+-- pollRetry = defaultPollRetryConfig
+-- ackRetry = defaultPollRetryConfig
 -- deadLetterConfig = Nothing
+-- haltVisibilityTimeout = Nothing
 -- maxRetries = 3
 -- fifoConfig = Nothing
--- lookaheadConfig = Nothing
 ```
 
 Override fields as needed:
@@ -123,24 +136,35 @@ Best when the queue is often empty. Reduces database round-trips but holds a con
 Set up multiple processors consuming from different queues:
 
 ```haskell
-runConsumer pool = runEff . runPgmq pool $ do
-  ordersAdapter <- pgmqAdapter ordersConfig
-  paymentsAdapter <- pgmqAdapter paymentsConfig
-  notificationsAdapter <- pgmqAdapter notificationsConfig
+runConsumer pool = do
+  runResult <- runEff $ runErrorNoCallStack $ runPgmq pool $ do
+    let env = mkPgmqAdapterEnv pool
+        requireAdapter result =
+          case result of
+            Left err -> liftIO $ fail $ "Invalid PGMQ adapter config: " <> show err
+            Right adapter -> pure adapter
 
-  result <- runApp IgnoreFailures 100
-    [ (ProcessorId "orders", mkProcessor ordersAdapter ordersHandler),
-      (ProcessorId "payments", mkProcessor paymentsAdapter paymentsHandler),
-      (ProcessorId "notifications", mkProcessor notificationsAdapter notificationsHandler)
-    ]
+    ordersAdapter <- requireAdapter =<< pgmqAdapter env ordersConfig
+    paymentsAdapter <- requireAdapter =<< pgmqAdapter env paymentsConfig
+    notificationsAdapter <- requireAdapter =<< pgmqAdapter env notificationsConfig
 
-  case result of
-    Left err -> liftIO $ print err
-    Right appHandle -> do
-      liftIO $ putStrLn "All processors running"
-      -- Wait for shutdown signal...
-      let shutdownConfig = ShutdownConfig { drainTimeout = 30 }
-      stopAppGracefully shutdownConfig appHandle
+    result <- runApp IgnoreFailures 100
+      [ (ProcessorId "orders", mkProcessor ordersAdapter ordersHandler),
+        (ProcessorId "payments", mkProcessor paymentsAdapter paymentsHandler),
+        (ProcessorId "notifications", mkProcessor notificationsAdapter notificationsHandler)
+      ]
+
+    case result of
+      Left err -> liftIO $ print err
+      Right appHandle -> do
+        liftIO $ putStrLn "All processors running"
+        -- Wait for shutdown signal...
+        let shutdownConfig = ShutdownConfig { drainTimeout = 30 }
+        stopAppGracefully shutdownConfig appHandle
+
+  case runResult of
+    Left err -> print err
+    Right () -> pure ()
 ```
 
 ## Message Lifecycle
@@ -150,7 +174,7 @@ runConsumer pool = runEff . runPgmq pool $ do
 3. On `AckOk`, messages are deleted from the queue
 4. On `AckRetry`, visibility timeout is extended by the retry delay
 5. On `AckDeadLetter`, messages are archived or sent to DLQ
-6. On `AckHalt`, visibility timeout is extended to 1 hour and the processor stops
+6. On `AckHalt`, visibility timeout is extended to `haltVisibilityTimeout` or `visibilityTimeout`, and the processor stops
 
 ## Automatic Retry Tracking
 
@@ -164,5 +188,5 @@ pgmq tracks retries via the `readCount` field. When a message's `readCount` exce
 
 - [Dead-Letter Queues](./pgmq-dead-letter-queues.md) - Configure DLQ with direct or topic-based routing
 - [Topic Routing](./pgmq-topic-routing.md) - AMQP-like topic binding and pattern matching
-- [Advanced PGMQ](./pgmq-advanced.md) - FIFO ordering, lookaheading, lease extension, tuning
+- [Advanced PGMQ](./pgmq-advanced.md) - FIFO ordering, lease extension, tuning
 - [Configuration Reference](../pgmq-adapter/CONFIGURATION.md) - Complete field-by-field reference

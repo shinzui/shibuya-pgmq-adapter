@@ -11,7 +11,6 @@ This document describes the architecture, data flow, and design decisions of the
 - [Ack Decision Handling](#ack-decision-handling)
 - [Polling Strategies](#polling-strategies)
 - [FIFO Support](#fifo-support)
-- [Lookaheading](#lookaheading)
 - [Shutdown Handling](#shutdown-handling)
 - [Design Decisions](#design-decisions)
 
@@ -36,7 +35,6 @@ The adapter translates between these models:
 │   │  [Poll pgmq]                  [Convert + filter]                 │   │
 │   │  [Vector Message]             [auto-DLQ if maxRetries]           │   │
 │   │                                                                  │   │
-│   │  (optional: parBuffered for concurrent lookaheading)              │   │
 │   └─────────────────────────────────────────────────────────────────┘   │
 │                                │                                         │
 │                                ▼                                         │
@@ -148,19 +146,6 @@ pgmqSource config =
 - Converts each `Pgmq.Message` to `Ingested es Value`
 - Filters out auto-dead-lettered messages (returns `Nothing`)
 - Creates `AckHandle` and `Lease` for each message
-
-### Layer 4: Lookaheading (Optional)
-
-```haskell
-pgmqSourceWithLookahead :: Stream (Eff es) (Ingested es Value)
-pgmqSourceWithLookahead lookaheadConfig config =
-  pgmqMessagesLookahead lookaheadConfig config
-    & Stream.mapMaybeM (mkIngested config)
-```
-
-- Uses `parBuffered` to poll concurrently
-- Keeps messages buffered for immediate consumption
-- Reduces latency at the cost of VT pressure
 
 ## Type Mappings
 
@@ -312,78 +297,28 @@ Next batch:          [A:2] [B:2] [C:2]  ← Fair distribution
 
 Uses `readGroupedRoundRobin` / `readGroupedRoundRobinWithPoll`. Good for multi-tenant systems.
 
-## Lookaheading
-
-### Without Lookaheading (Default)
-
-```
-Poll ─────────► Process ─────────► Poll ─────────► Process
-      10ms            50ms               10ms            50ms
-
-Total per message: 60ms (10ms poll latency)
-```
-
-### With Lookaheading
-
-```
-Poll ──────────────────────────────────────────────►
-           │                │                │
-           ▼                ▼                ▼
-      [Buffer: msg1, msg2, msg3, ...]
-           │
-           ▼
-Process ────► Process ────► Process ────►
-     50ms        50ms          50ms
-
-Total per message: ~50ms (poll overlapped)
-```
-
-The `parBuffered` combinator runs polling concurrently with consumption:
-
-```haskell
-pgmqSourceWithLookahead lookaheadConfig config =
-  pgmqChunks config
-    & StreamP.parBuffered (StreamP.maxBuffer bufferSize)
-    & Stream.filter (not . Vector.null)
-    & Stream.unfoldEach vectorUnfold
-    & Stream.mapMaybeM (mkIngested config)
-```
-
-### Visibility Timeout Safety
-
-Lookaheaded messages have their VT ticking while buffered. Ensure:
-
-```
-bufferSize * batchSize * avgProcessingTime < visibilityTimeout
-```
-
-Example:
-- Buffer: 4 batches
-- Batch size: 10 messages
-- Avg processing: 100ms
-- Max buffered time: 4 * 10 * 100ms = 4 seconds
-- VT should be: > 4 seconds (e.g., 30 seconds)
-
 ## Shutdown Handling
 
 ```haskell
-pgmqAdapter :: ... -> Eff es (Adapter es Value)
-pgmqAdapter config = do
+pgmqAdapter :: ... -> PgmqAdapterEnv -> PgmqAdapterConfig -> Eff es (Either PgmqConfigError (Adapter es Value))
+pgmqAdapter env config = do
   shutdownVar <- newTVarIO False
 
-  let messageSource = ...
+  let messageSource = pgmqSourceWithShutdown env config shutdownVar
 
-  pure Adapter
-    { adapterName = "pgmq:" <> queueNameToText config.queueName,
-      source = takeUntilShutdown shutdownVar messageSource,
-      shutdown = atomically $ writeTVar shutdownVar True
-    }
+  pure $
+    Right
+      Adapter
+        { adapterName = "pgmq:" <> queueNameToText config.queueName,
+          source = messageSource,
+          shutdown = atomically $ writeTVar shutdownVar True
+        }
 ```
 
 Shutdown flow:
 1. `stopApp` calls `adapter.shutdown`
 2. `shutdownVar` is set to `True`
-3. `takeUntilShutdown` stops yielding new messages
+3. The source stops at the next chunk boundary and releases any just-read, undispatched messages by setting their visibility timeout to 0
 4. Ingester thread completes
 5. Processor drains remaining messages in inbox
 6. Handler completes final message with ack
@@ -430,14 +365,14 @@ Messages in-flight are processed to completion. Messages not yet polled remain i
 
 **Rationale**: Some applications prefer archiving over separate DLQ. Flexibility for different use cases.
 
-### 6. Lookaheading as Optional
+### 6. Removed Lookaheading
 
-**Decision**: Lookaheading is disabled by default.
+**Decision**: Concurrent lookaheading was removed from the public adapter API.
 
-**Rationale**: Lookaheading adds complexity (VT pressure) and isn't needed for all workloads. Users opt-in when latency matters.
+**Rationale**: The previous Streamly `parBuffered` implementation could deadlock under the adapter's effect stack and let message visibility timeouts tick while buffered.
 
-### 7. AckHalt Uses Long VT Extension
+### 7. AckHalt Uses Configurable VT Extension
 
-**Decision**: `AckHalt` extends VT to 1 hour instead of returning message immediately.
+**Decision**: `AckHalt` extends VT using `haltVisibilityTimeout` when set, otherwise `visibilityTimeout`.
 
-**Rationale**: Prevents tight retry loop during halt. Message becomes visible after processor restart, allowing time for investigation.
+**Rationale**: Prevents tight retry loops during halt while keeping the parking duration explicit in configuration.

@@ -21,7 +21,6 @@ The pgmq adapter creates a Shibuya `Adapter` that:
 4. **Provides lease extension** for long-running handlers
 5. **Handles automatic dead-lettering** when retry limits are exceeded
 6. **Supports FIFO ordering** via pgmq's grouped read operations
-7. **Enables concurrent lookaheading** to minimize processing latency
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -66,11 +65,13 @@ build-depends:
 ### Basic Usage
 
 ```haskell
-import Shibuya.App (runApp, QueueProcessor (..), ProcessorId (..))
+import Shibuya.App (mkProcessor, runApp, stopApp)
+import Shibuya.Core.Types (ProcessorId (..))
 import Shibuya.Adapter.Pgmq
 import Pgmq.Effectful (runPgmq)
 import Hasql.Pool qualified as Pool
 import Effectful (runEff)
+import Effectful.Error.Static (runErrorNoCallStack)
 
 main :: IO ()
 main = do
@@ -84,13 +85,18 @@ main = do
   let config = defaultConfig queueName
 
   -- Run with effectful
-  runEff . runPgmq pool $ do
+  runResult <- runEff $ runErrorNoCallStack $ runPgmq pool $ do
+    let env = mkPgmqAdapterEnv pool
+
     -- Create adapter
-    adapter <- pgmqAdapter config
+    adapterResult <- pgmqAdapter env config
+    adapter <- case adapterResult of
+      Left err -> liftIO $ fail $ "Invalid PGMQ adapter config: " <> show err
+      Right adapter -> pure adapter
 
     -- Start Shibuya application
     result <- runApp IgnoreFailures 100
-      [ (ProcessorId "orders", QueueProcessor adapter handleOrder)
+      [ (ProcessorId "orders", mkProcessor adapter handleOrder)
       ]
 
     case result of
@@ -99,6 +105,10 @@ main = do
         -- Application is running...
         liftIO waitForShutdown
         stopApp handle
+
+  case runResult of
+    Left err -> print err
+    Right () -> pure ()
 
 handleOrder :: Handler es Value
 handleOrder ingested = do
@@ -138,15 +148,6 @@ let config = (defaultConfig queueName)
       }
 ```
 
-### With Concurrent Lookaheading
-
-```haskell
-let config = (defaultConfig queueName)
-      { lookaheadConfig = Just defaultLookaheadConfig,
-        batchSize = 10
-      }
-```
-
 ## Features
 
 | Feature | Description |
@@ -158,7 +159,6 @@ let config = (defaultConfig queueName)
 | **Automatic Retry** | Uses pgmq's `readCount` to track and limit retries |
 | **Dead-Letter Queue** | Optional DLQ with configurable metadata inclusion |
 | **FIFO Ordering** | Grouped message processing with pgmq 1.8.0+ |
-| **Concurrent Lookahead** | Polls next batch while processing current messages |
 | **Graceful Shutdown** | Stops polling while allowing in-flight messages to complete |
 
 ## Requirements

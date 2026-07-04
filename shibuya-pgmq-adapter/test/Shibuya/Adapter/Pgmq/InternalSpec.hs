@@ -25,7 +25,8 @@ import Shibuya.Adapter.Pgmq.Config
     defaultPollingConfig,
   )
 import Shibuya.Adapter.Pgmq.Internal
-  ( mergeDlqHeaders,
+  ( finalizeAutoDeadLetter,
+    mergeDlqHeaders,
     mkReadGrouped,
     mkReadMessage,
     mkReadWithPoll,
@@ -42,6 +43,7 @@ spec = do
   mkReadWithPollSpec
   mkReadGroupedSpec
   pollRetrySpec
+  autoDeadLetterHookSpec
   mergeDlqHeadersSpec
 
 -- | Tests for nominalToSeconds
@@ -224,6 +226,42 @@ pollRetrySpec = describe "pgmqChunks poll retry" $ do
     result `shouldBe` Left transientError
     readIORef calls `shouldReturn` 2
 
+autoDeadLetterHookSpec :: Spec
+autoDeadLetterHookSpec = describe "finalizeAutoDeadLetter" $ do
+  it "calls the auto-DLQ hook only after finalize succeeds" $ do
+    autoCalls <- newIORef (0 :: Int)
+    failureCalls <- newIORef (0 :: Int)
+    let action :: Eff '[Error PgmqRuntimeError, IOE] ()
+        action =
+          finalizeAutoDeadLetter
+            testMessage
+            (\_ -> bump autoCalls)
+            (\_ _ -> bump failureCalls)
+            (pure ())
+
+    result <- runEff $ runErrorNoCallStack action
+
+    result `shouldBe` Right ()
+    readIORef autoCalls `shouldReturn` 1
+    readIORef failureCalls `shouldReturn` 0
+
+  it "calls the ack-failure hook without reporting auto-DLQ success when finalize fails" $ do
+    autoCalls <- newIORef (0 :: Int)
+    failureCalls <- newIORef (0 :: Int)
+    let action :: Eff '[Error PgmqRuntimeError, IOE] ()
+        action =
+          finalizeAutoDeadLetter
+            testMessage
+            (\_ -> bump autoCalls)
+            (\_ _ -> bump failureCalls)
+            (throwError permanentError)
+
+    result <- runEff $ runErrorNoCallStack action
+
+    result `shouldBe` Right ()
+    readIORef autoCalls `shouldReturn` 0
+    readIORef failureCalls `shouldReturn` 1
+
 -- | Tests for mergeDlqHeaders, the helper that injects the failing
 -- consumer's trace context onto a DLQ message while preserving the
 -- original producer's trace under x-shibuya-upstream-* keys.
@@ -370,6 +408,9 @@ transientError = PgmqAcquisitionTimeout
 permanentError :: PgmqRuntimeError
 permanentError =
   PgmqConnectionError (HasqlErrors.AuthenticationConnectionError "bad password")
+
+bump :: IORef Int -> IO ()
+bump ref = atomicModifyIORef' ref (\n -> (n + 1, ()))
 
 testMessage :: Message
 testMessage =

@@ -9,6 +9,7 @@ module Shibuya.Adapter.Pgmq.Internal
 
     -- * Ingested Construction
     mkIngested,
+    finalizeAutoDeadLetter,
 
     -- * AckHandle Construction
     mkAckHandle,
@@ -395,9 +396,11 @@ mkIngested env config msg = do
   if msg.readCount > config.maxRetries
     then do
       -- Auto dead-letter messages that exceed retry limit
-      ackHandle.finalize (AckDeadLetter MaxRetriesExceeded)
-        `catchError` \_callStack err -> liftIO (env.onAckFailure msg err)
-      liftIO $ env.onAutoDeadLetter msg
+      finalizeAutoDeadLetter
+        msg
+        env.onAutoDeadLetter
+        env.onAckFailure
+        (ackHandle.finalize (AckDeadLetter MaxRetriesExceeded))
       -- Return Nothing - this message won't be processed by handler
       pure Nothing
     else
@@ -408,6 +411,17 @@ mkIngested env config msg = do
               ack = ackHandle,
               lease = Just lease
             }
+
+finalizeAutoDeadLetter ::
+  (Error PgmqRuntimeError :> es, IOE :> es) =>
+  Pgmq.Message ->
+  (Pgmq.Message -> IO ()) ->
+  (Pgmq.Message -> PgmqRuntimeError -> IO ()) ->
+  Eff es () ->
+  Eff es ()
+finalizeAutoDeadLetter msg onAutoDeadLetter onAckFailure finalizeAction =
+  (finalizeAction >> liftIO (onAutoDeadLetter msg))
+    `catchError` \_callStack err -> liftIO (onAckFailure msg err)
 
 -- | Stream of message batches from pgmq.
 -- Each element is a Vector of messages from a single poll.

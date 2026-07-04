@@ -8,7 +8,6 @@ This document provides a complete reference for all configuration options in the
 - [PollingConfig](#pollingconfig)
 - [DeadLetterConfig](#deadletterconfig)
 - [FifoConfig](#fifoconfig)
-- [LookaheadConfig](#lookaheadconfig)
 - [Default Configurations](#default-configurations)
 - [Configuration Examples](#configuration-examples)
 - [Tuning Guidelines](#tuning-guidelines)
@@ -23,10 +22,12 @@ data PgmqAdapterConfig = PgmqAdapterConfig
     visibilityTimeout :: !Int32,
     batchSize :: !Int32,
     polling :: !PollingConfig,
+    pollRetry :: !PollRetryConfig,
+    ackRetry :: !PollRetryConfig,
     deadLetterConfig :: !(Maybe DeadLetterConfig),
+    haltVisibilityTimeout :: !(Maybe Int32),
     maxRetries :: !Int64,
-    fifoConfig :: !(Maybe FifoConfig),
-    lookaheadConfig :: !(Maybe LookaheadConfig)
+    fifoConfig :: !(Maybe FifoConfig)
   }
 ```
 
@@ -38,10 +39,12 @@ data PgmqAdapterConfig = PgmqAdapterConfig
 | `visibilityTimeout` | `Int32` | 30 | Seconds a message is invisible after being read. |
 | `batchSize` | `Int32` | 1 | Maximum messages to read per poll. |
 | `polling` | `PollingConfig` | `StandardPolling` | Polling strategy (standard or long polling). |
+| `pollRetry` | `PollRetryConfig` | `defaultPollRetryConfig` | Retry policy for transient polling failures. |
+| `ackRetry` | `PollRetryConfig` | `defaultPollRetryConfig` | Retry policy for transient acknowledgement failures. |
 | `deadLetterConfig` | `Maybe DeadLetterConfig` | `Nothing` | Optional dead-letter queue configuration. |
-| `maxRetries` | `Int64` | 3 | Maximum retries before auto dead-lettering. |
+| `haltVisibilityTimeout` | `Maybe Int32` | `Nothing` | Visibility timeout used for `AckHalt`; falls back to `visibilityTimeout`. |
+| `maxRetries` | `Int64` | 3 | Maximum deliveries before auto dead-lettering. |
 | `fifoConfig` | `Maybe FifoConfig` | `Nothing` | Optional FIFO ordering configuration. |
-| `lookaheadConfig` | `Maybe LookaheadConfig` | `Nothing` | Optional concurrent lookahead configuration. |
 
 ### queueName
 
@@ -77,13 +80,13 @@ Note: All messages in a batch are processed. There is no wastage.
 
 ### maxRetries
 
-Based on pgmq's `readCount` field. When a message's `readCount` exceeds `maxRetries`:
+Based on pgmq's `readCount` field, which counts deliveries, not handler failures. When a message's `readCount` exceeds `maxRetries`:
 
 1. The adapter automatically dead-letters the message
 2. The handler never sees the message
 3. No manual retry tracking needed
 
-Set to 0 to disable auto dead-lettering (not recommended).
+Set to 0 only when you intentionally want to drain the queue into the DLQ/archive before handlers see messages. pgmq increments `readCount` on first delivery, so `maxRetries = 0` auto-dead-letters every delivered message.
 
 ## PollingConfig
 
@@ -286,71 +289,6 @@ extractPartition headers = do
 
 The partition is available in `ingested.envelope.partition`.
 
-## LookaheadConfig
-
-Configures concurrent lookaheading to reduce latency.
-
-```haskell
-data LookaheadConfig = LookaheadConfig
-  { bufferSize :: !Natural
-  }
-```
-
-### Fields
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `bufferSize` | `Natural` | 4 | Number of batches to buffer ahead. |
-
-### How It Works
-
-Without lookaheading:
-```
-[Poll] -> [Process batch] -> [Poll] -> [Process batch]
-  10ms        100ms            10ms        100ms
-```
-
-With lookaheading:
-```
-[Poll] ────────────────────────────────►
-        [Process batch] [Process batch]
-             100ms          100ms
-```
-
-Uses Streamly's `parBuffered` to poll concurrently while processing.
-
-### Visibility Timeout Pressure
-
-**Warning**: Lookaheaded messages have their visibility timeout ticking while buffered.
-
-Calculate safe buffer size:
-```
-maxBufferedTime = bufferSize * batchSize * avgProcessingTime
-visibilityTimeout > maxBufferedTime
-```
-
-Example calculation:
-```
-bufferSize = 4
-batchSize = 10
-avgProcessingTime = 200ms
-
-maxBufferedTime = 4 * 10 * 200ms = 8 seconds
-visibilityTimeout should be > 8 seconds (e.g., 30 seconds)
-```
-
-### When to Enable
-
-Enable lookaheading when:
-- Processing latency matters
-- Handler processing time is consistent
-- visibilityTimeout is sufficiently large
-
-Avoid lookaheading when:
-- Handler processing time is highly variable
-- visibilityTimeout is tight
-- Memory is constrained
-
 ## Default Configurations
 
 ### defaultConfig
@@ -362,10 +300,12 @@ defaultConfig name = PgmqAdapterConfig
     visibilityTimeout = 30,
     batchSize = 1,
     polling = defaultPollingConfig,
+    pollRetry = defaultPollRetryConfig,
+    ackRetry = defaultPollRetryConfig,
     deadLetterConfig = Nothing,
+    haltVisibilityTimeout = Nothing,
     maxRetries = 3,
-    fifoConfig = Nothing,
-    lookaheadConfig = Nothing
+    fifoConfig = Nothing
   }
 ```
 
@@ -376,13 +316,6 @@ defaultPollingConfig :: PollingConfig
 defaultPollingConfig = StandardPolling { pollInterval = 1 }
 ```
 
-### defaultLookaheadConfig
-
-```haskell
-defaultLookaheadConfig :: LookaheadConfig
-defaultLookaheadConfig = LookaheadConfig { bufferSize = 4 }
-```
-
 ## Configuration Examples
 
 ### High-Throughput Processing
@@ -391,8 +324,7 @@ defaultLookaheadConfig = LookaheadConfig { bufferSize = 4 }
 let config = (defaultConfig queueName)
       { batchSize = 100,
         visibilityTimeout = 120,  -- 2 minutes
-        polling = StandardPolling { pollInterval = 0.1 },  -- 100ms
-        lookaheadConfig = Just LookaheadConfig { bufferSize = 8 }
+        polling = StandardPolling { pollInterval = 0.1 }  -- 100ms
       }
 ```
 
@@ -404,8 +336,7 @@ let config = (defaultConfig queueName)
         visibilityTimeout = 30,
         polling = LongPolling { maxPollSeconds = 5, pollIntervalMs = 50 },
         deadLetterConfig = Just $ directDeadLetter dlqName True,
-        maxRetries = 3,
-        lookaheadConfig = Just defaultLookaheadConfig
+        maxRetries = 3
       }
 ```
 
@@ -460,14 +391,3 @@ let config = (defaultConfig queueName)
 | Often empty | LongPolling (5-10s max) |
 | Bursty | LongPolling with short max |
 | High throughput | StandardPolling (10-50ms) |
-
-### Lookahead Buffer
-
-| Processing Time | Recommended Buffer |
-|-----------------|-------------------|
-| < 100ms avg | 8-16 batches |
-| 100-500ms avg | 4-8 batches |
-| > 500ms avg | 2-4 batches |
-| Highly variable | Disable lookaheading |
-
-Remember: `bufferSize * batchSize * avgTime < visibilityTimeout`

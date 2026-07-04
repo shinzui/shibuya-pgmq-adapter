@@ -1,6 +1,6 @@
 # PGMQ Adapter: Advanced Configuration
 
-This guide covers FIFO ordering, concurrent lookaheading, lease extension, and tuning.
+This guide covers FIFO ordering, lease extension, and tuning.
 
 ## FIFO Ordering
 
@@ -44,67 +44,6 @@ Batch 3:    [A:3, C:3, C:4]
 
 Best for: multi-tenant systems, load balancing - when fairness across groups matters.
 
-## Concurrent Lookaheading
-
-Lookaheading polls the next batch while the current one is being processed, reducing latency.
-
-### Enabling Lookahead
-
-```haskell
-let config = (defaultConfig queueName)
-      { lookaheadConfig = Just defaultLookaheadConfig,  -- bufferSize = 4
-        batchSize = 10
-      }
-```
-
-### Custom Buffer Size
-
-```haskell
-let config = (defaultConfig queueName)
-      { lookaheadConfig = Just LookaheadConfig { bufferSize = 8 }
-      }
-```
-
-### How It Works
-
-Without lookaheading:
-```
-[Poll] -> [Process batch] -> [Poll] -> [Process batch]
-  10ms        100ms            10ms        100ms
-```
-
-With lookaheading:
-```
-[Poll] ────────────────────────────────►
-        [Process batch] [Process batch]
-             100ms          100ms
-```
-
-### Visibility Timeout Safety
-
-Lookaheaded messages have their visibility timeout ticking while buffered. Ensure:
-
-```
-bufferSize * batchSize * avgProcessingTime < visibilityTimeout
-```
-
-Example:
-```
-bufferSize = 4, batchSize = 10, avgProcessingTime = 200ms
-maxBufferedTime = 4 * 10 * 200ms = 8 seconds
-visibilityTimeout should be > 8 seconds (e.g., 30 seconds)
-```
-
-### When to Enable
-
-| Scenario | Recommendation |
-|----------|---------------|
-| Processing latency matters | Enable |
-| Consistent handler processing time | Enable |
-| Highly variable processing time | Avoid |
-| Tight visibility timeout | Avoid |
-| Memory constrained | Avoid |
-
 ## Lease Extension
 
 For queues with visibility timeouts, extend the lease for long-running operations:
@@ -129,7 +68,7 @@ handleLongRunning ingested = do
     Left err -> AckRetry (RetryDelay 60)
 ```
 
-The PGMQ adapter always provides a lease. Extending the lease calls `changeVisibilityTimeout` to push the message's VT into the future.
+The PGMQ adapter always provides a lease. Extending the lease uses pgmq's absolute visibility-timeout API and never shortens an already-extended lease.
 
 ## Tuning Guidelines
 
@@ -160,17 +99,6 @@ The PGMQ adapter always provides a lease. Extending the lease calls `changeVisib
 | Bursty | LongPolling with short max |
 | High throughput | StandardPolling (10-50ms) |
 
-### Lookahead Buffer
-
-| Processing Time | Recommended Buffer |
-|-----------------|-------------------|
-| < 100ms avg | 8-16 batches |
-| 100-500ms avg | 4-8 batches |
-| > 500ms avg | 2-4 batches |
-| Highly variable | Disable lookaheading |
-
-Remember: `bufferSize * batchSize * avgTime < visibilityTimeout`
-
 ## Configuration Examples
 
 ### High-Throughput Processing
@@ -179,8 +107,7 @@ Remember: `bufferSize * batchSize * avgTime < visibilityTimeout`
 let config = (defaultConfig queueName)
       { batchSize = 100,
         visibilityTimeout = 120,  -- 2 minutes
-        polling = StandardPolling { pollInterval = 0.1 },  -- 100ms
-        lookaheadConfig = Just LookaheadConfig { bufferSize = 8 }
+        polling = StandardPolling { pollInterval = 0.1 }  -- 100ms
       }
 ```
 

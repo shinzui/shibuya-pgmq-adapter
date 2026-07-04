@@ -56,36 +56,32 @@ import Shibuya.Adapter.Pgmq.Internal
 
 ```haskell
 pgmqAdapter ::
-  (Pgmq :> es, IOE :> es) =>
+  (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es, Tracing :> es) =>
+  PgmqAdapterEnv ->
   PgmqAdapterConfig ->
-  Eff es (Adapter es Value)
+  Eff es (Either PgmqConfigError (Adapter es Value))
 ```
 
 **Implementation details**:
 
-1. Creates a shutdown TVar for graceful termination
-2. Selects stream source based on lookahead configuration
-3. Wraps source with shutdown checking
-4. Returns Adapter record
+1. Validates configuration
+2. Creates a shutdown TVar for graceful termination
+3. Builds a chunk-aware source that can release just-read messages on shutdown
+4. Returns an Adapter record on success
 
 ```haskell
-pgmqAdapter config = do
-  -- Shutdown signal: TVar Bool, starts False
-  shutdownVar <- liftIO $ newTVarIO False
-
-  -- Select source based on lookahead config
-  let messageSource = case config.lookaheadConfig of
-        Nothing ->
-          pgmqSource config  -- Sequential polling
-        Just lookahead ->
-          let lookaheadSettings = StreamP.maxBuffer (fromIntegral lookahead.bufferSize)
-           in pgmqSourceWithLookahead lookaheadSettings config  -- Concurrent
-
-  pure Adapter
-    { adapterName = "pgmq:" <> queueNameToText config.queueName,
-      source = takeUntilShutdown shutdownVar messageSource,
-      shutdown = liftIO $ atomically $ writeTVar shutdownVar True
-    }
+pgmqAdapter env config =
+  case validateConfig config of
+    Left err -> pure (Left err)
+    Right validConfig -> do
+      shutdownVar <- liftIO $ newTVarIO False
+      pure $
+        Right
+          Adapter
+            { adapterName = "pgmq:" <> queueNameToText validConfig.queueName,
+              source = pgmqSourceWithShutdown env validConfig shutdownVar,
+              shutdown = liftIO $ atomically $ writeTVar shutdownVar True
+            }
 ```
 
 ### takeUntilShutdown
@@ -126,9 +122,6 @@ data FifoConfig = FifoConfig { ... }
   deriving stock (Show, Eq, Generic)
 
 data FifoReadStrategy = ThroughputOptimized | RoundRobin
-  deriving stock (Show, Eq, Generic)
-
-data LookaheadConfig = LookaheadConfig { ... }
   deriving stock (Show, Eq, Generic)
 ```
 
@@ -474,21 +467,6 @@ nominalToSeconds = ceiling . nominalDiffTimeToSeconds
 
 Uses `ceiling` to round up. A 1.1 second delay becomes 2 seconds in pgmq.
 
-### Lookahead Variants
-
-```haskell
-pgmqChunksLookahead ::
-  (Pgmq :> es, IOE :> es) =>
-  (StreamP.Config -> StreamP.Config) ->
-  PgmqAdapterConfig ->
-  Stream (Eff es) (Vector Pgmq.Message)
-pgmqChunksLookahead lookaheadConfig config =
-  pgmqChunks config
-    & StreamP.parBuffered lookaheadConfig
-```
-
-`parBuffered` runs the upstream concurrently, buffering results.
-
 ## pgmq-effectful Integration
 
 The adapter uses these pgmq-effectful functions:
@@ -537,10 +515,6 @@ Stream.takeWhileM $ \_ -> do
 
 STM ensures atomic reads/writes. No race conditions between shutdown signal and stream consumption.
 
-### Streamly Concurrency
-
-`parBuffered` handles its own thread safety internally. The adapter doesn't need additional synchronization.
-
 ## Performance Considerations
 
 ### Batch Efficiency
@@ -557,10 +531,9 @@ After the optimization, all messages in each batch are processed:
 
 Memory usage scales with:
 - `batchSize` - size of each Vector
-- `bufferSize` (lookahead) - number of buffered Vectors
 - Shibuya inbox size - messages waiting for handler
 
-Worst-case buffered messages: `batchSize * bufferSize + inboxSize`
+Worst-case adapter/core buffered messages are bounded by the current pgmq chunk plus Shibuya's inbox size.
 
 ### CPU Overhead
 
@@ -598,7 +571,6 @@ Not currently implemented but recommended:
 2. Visibility timeout behavior
 3. DLQ flow
 4. FIFO ordering verification
-5. Lookahead latency measurement
-6. Graceful shutdown with in-flight messages
+5. Graceful shutdown with in-flight messages
 
 Would require PostgreSQL with pgmq extension (testcontainers recommended).
