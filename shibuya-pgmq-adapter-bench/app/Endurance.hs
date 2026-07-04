@@ -48,15 +48,15 @@ import Shibuya.Adapter.Pgmq
     pgmqAdapter,
   )
 import Shibuya.App
-  ( ShutdownConfig (..),
-    SupervisionStrategy (..),
+  ( ProcessorId (..),
+    ShutdownConfig (..),
+    defaultAppConfig,
     mkProcessor,
     runApp,
     stopAppGracefully,
   )
 import Shibuya.Core.Ack (AckDecision (..))
 import Shibuya.Handler (Handler)
-import Shibuya.Runner.Metrics (ProcessorId (..))
 import Shibuya.Telemetry.Effect (runTracingNoop)
 import System.Environment (getEnv, lookupEnv)
 import System.IO (Handle, IOMode (..), hFlush, hPutStrLn, withFile)
@@ -333,7 +333,7 @@ runEnduranceTest config pool queueName = do
       let handler = makeHandler processedRef failedRef
           processor = mkProcessor adapter handler
 
-      result <- runApp IgnoreFailures 100 [(ProcessorId "endurance", processor)]
+      result <- runApp defaultAppConfig [(ProcessorId "endurance", processor)]
       case result of
         Left err -> liftIO $ error $ "Failed to start app: " <> show err
         Right appHandle -> do

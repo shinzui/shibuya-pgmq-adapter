@@ -56,14 +56,14 @@ import Shibuya.Adapter.Pgmq qualified as Pgmq
 import Shibuya.App
   ( ProcessorId (..),
     ShutdownConfig (..),
-    SupervisionStrategy (..),
+    defaultAppConfig,
     getAppMaster,
     mkProcessor,
     runApp,
     stopAppGracefully,
   )
 import Shibuya.Core.Ack (AckDecision (..), DeadLetterReason (..), RetryDelay (..))
-import Shibuya.Core.Ingested (Ingested (..))
+import Shibuya.Core.Ingested (Message (..))
 import Shibuya.Core.Retry
   ( BackoffPolicy (..),
     Jitter (..),
@@ -87,7 +87,7 @@ import System.Random (randomRIO)
 
 -- | Orders handler: 10% random retry, validate JSON structure.
 ordersHandler :: (IOE :> es) => Handler es Value
-ordersHandler (Ingested {envelope = Envelope {payload, messageId = MessageId msgIdText}}) = do
+ordersHandler (Message {envelope = Envelope {payload, messageId = MessageId msgIdText}}) = do
   liftIO $ Text.putStrLn $ "[orders] Processing: " <> msgIdText
 
   -- Validate that payload has expected structure
@@ -118,7 +118,7 @@ parseOrder = withObject "Order" $ \v -> do
 
 -- | Payments handler: Validate amount, DLQ for invalid amounts.
 paymentsHandler :: (IOE :> es) => Handler es Value
-paymentsHandler (Ingested {envelope = Envelope {payload, messageId = MessageId msgIdText}}) = do
+paymentsHandler (Message {envelope = Envelope {payload, messageId = MessageId msgIdText}}) = do
   liftIO $ Text.putStrLn $ "[payments] Processing: " <> msgIdText
 
   case parseMaybe parsePayment payload of
@@ -154,7 +154,7 @@ parsePayment = withObject "Payment" $ \v -> do
 
 -- | Notifications handler: Fast processing, minimal logic.
 notificationsHandler :: (IOE :> es) => Handler es Value
-notificationsHandler (Ingested {envelope = Envelope {payload, messageId = MessageId msgIdText}}) = do
+notificationsHandler (Message {envelope = Envelope {payload, messageId = MessageId msgIdText}}) = do
   -- Fast path - just acknowledge
   case parseMaybe parseNotification payload of
     Nothing -> do
@@ -376,8 +376,7 @@ runBackoffDemoConsumer pool tracer policy failuresRef shutdownVar = do
     let proc = mkProcessor adapter (backoffDemoHandler failuresRef policy)
     result <-
       runApp
-        IgnoreFailures
-        100
+        defaultAppConfig
         [(ProcessorId "backoff-demo", proc)]
 
     case result of
@@ -427,8 +426,7 @@ runConsumer pool tracer metricsPort shutdownVar = do
     -- Start the application
     result <-
       runApp
-        IgnoreFailures
-        100 -- inbox size
+        defaultAppConfig
         [ (ProcessorId "orders", ordersProc),
           (ProcessorId "payments", paymentsProc),
           (ProcessorId "notifications", notificationsProc)

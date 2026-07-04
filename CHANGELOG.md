@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.11.0.0 — 2026-07-04
+
+### Breaking Changes
+
+- Requires `shibuya-core ^>=0.8.0.1` (up from `^>=0.7.0.0`). `shibuya-core 0.8.0.0` is a breaking release: handlers now receive `Message es msg` (envelope + optional lease, no ack finalizer) instead of `Ingested`, and `runApp` takes a validated `AppConfig` record instead of positional supervision-strategy / inbox-size arguments (`defaultAppConfig` is the drop-in default for `runApp IgnoreFailures 100 …`). Runner internals moved under `Shibuya.Internal.*`; `ProcessorId` is now public via `Shibuya.Core.Metrics` (re-exported from `Shibuya.App`). The adapter's own public API is unchanged — `pgmqSource` still yields `Ingested es Value` and the framework projects it to the handler-facing `Message`.
+
+### Other Changes
+
+- The `^>=0.8.0.1` lower bound pulls in the `shibuya-core 0.8.0.1` patch, which cuts per-message allocation on the `Async`/`Ahead` concurrency dispatch paths (no API or behavior change).
+- Updated the example app, benchmark suite, README, and getting-started guide to the `shibuya-core 0.8.0.0` API (`runApp defaultAppConfig`, the `Message` handler pattern, `ProcessorId` from `Shibuya.App`).
+
+## 0.10.0.0 — 2026-07-04
+
+### Features
+
+- Reintroduced opt-in concurrent prefetch via `prefetchConfig :: Maybe PrefetchConfig` (default `Nothing`). When enabled, the polling stage reads the next batches on a background worker, overlapping database latency with handler work. The historical `parBuffered` STM deadlock is fixed by scoping only the prefetch stage under effectful's `ConcUnlift` strategy, so the non-prefetch path is unchanged.
+
+### Breaking Changes
+
+- `PgmqAdapterConfig` gained a `prefetchConfig :: Maybe PrefetchConfig` field (`defaultConfig` sets it to `Nothing`); callers that construct the config by full record literal must add it.
+- `PgmqConfigError` gained an `InvalidPrefetchBufferSize` constructor; `validateConfig` now rejects a prefetch `bufferSize` of `0`.
+
+### Notes
+
+- Shutdown with prefetch enabled can leave up to `bufferSize * batchSize` already-read messages invisible until their visibility timeout expires. No messages are lost — they are redelivered after the visibility timeout; only redelivery is delayed.
+
 ## 0.9.0.0 — 2026-07-02
 
 ### Breaking Changes

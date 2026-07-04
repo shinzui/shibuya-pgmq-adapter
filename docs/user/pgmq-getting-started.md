@@ -22,8 +22,7 @@ build-depends:
 ## Basic Consumer
 
 ```haskell
-import Shibuya.App (mkProcessor, runApp, stopApp)
-import Shibuya.Core.Types (ProcessorId (..))
+import Shibuya.App (ProcessorId (..), defaultAppConfig, mkProcessor, runApp, stopApp)
 import Shibuya.Adapter.Pgmq
 import Pgmq.Effectful (runPgmq)
 import Hasql.Pool qualified as Pool
@@ -52,7 +51,7 @@ main = do
       Right adapter -> pure adapter
 
     -- Start Shibuya application
-    result <- runApp IgnoreFailures 100
+    result <- runApp defaultAppConfig
       [ (ProcessorId "orders", mkProcessor adapter handleOrder)
       ]
 
@@ -149,7 +148,7 @@ runConsumer pool = do
     paymentsAdapter <- requireAdapter =<< pgmqAdapter env paymentsConfig
     notificationsAdapter <- requireAdapter =<< pgmqAdapter env notificationsConfig
 
-    result <- runApp IgnoreFailures 100
+    result <- runApp defaultAppConfig
       [ (ProcessorId "orders", mkProcessor ordersAdapter ordersHandler),
         (ProcessorId "payments", mkProcessor paymentsAdapter paymentsHandler),
         (ProcessorId "notifications", mkProcessor notificationsAdapter notificationsHandler)

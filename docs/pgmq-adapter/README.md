@@ -65,8 +65,7 @@ build-depends:
 ### Basic Usage
 
 ```haskell
-import Shibuya.App (mkProcessor, runApp, stopApp)
-import Shibuya.Core.Types (ProcessorId (..))
+import Shibuya.App (ProcessorId (..), defaultAppConfig, mkProcessor, runApp, stopApp)
 import Shibuya.Adapter.Pgmq
 import Pgmq.Effectful (runPgmq)
 import Hasql.Pool qualified as Pool
@@ -103,7 +102,7 @@ main = do
       Right adapter -> pure adapter
 
     -- Start Shibuya application
-    result <- runApp IgnoreFailures 100
+    result <- runApp defaultAppConfig
       [ (ProcessorId "orders", mkProcessor adapter handleOrder)
       ]
 

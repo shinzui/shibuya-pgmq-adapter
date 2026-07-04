@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.11.0.0 — 2026-07-04
+
+Paired with `shibuya-core 0.8.0.1`.
+
+### Breaking Changes
+
+- Requires `shibuya-core ^>=0.8.0.1` (up from `^>=0.7.0.0`) in the library and
+  test stanzas. `shibuya-core 0.8.0.0` is a breaking release, so adapter
+  consumers must migrate along with it:
+  - Handlers now receive `Message es msg` (envelope + optional lease, no ack
+    finalizer) instead of `Ingested`. Handlers written against the `Handler`
+    type alias that read `msg.envelope` / `msg.lease` compile unchanged;
+    handlers with an explicit `Ingested es msg -> …` signature must switch to
+    `Message es msg -> …`.
+  - `runApp` now takes a validated `AppConfig` record instead of positional
+    supervision-strategy and inbox-size arguments. `defaultAppConfig`
+    (`AppConfig { strategy = IgnoreFailures, inboxSize = 100 }`) is the drop-in
+    replacement for the old `runApp IgnoreFailures 100 …`.
+  - The runner internals moved under `Shibuya.Internal.*`; metrics types such as
+    `ProcessorId` are public via `Shibuya.Core.Metrics` (and re-exported from
+    `Shibuya.App`).
+
+  See the `shibuya-core 0.8.0.0` migration guide for the full list.
+
+### Notes
+
+- The `^>=0.8.0.1` lower bound (rather than `0.8.0.0`) pulls in the
+  `shibuya-core 0.8.0.1` patch, which cuts per-message allocation on the `Async`
+  and `Ahead` concurrency dispatch paths. No API or behavior change; it benefits
+  the adapter's throughput on those paths for free.
+- The adapter's own public API is unchanged. `pgmqSource` still yields
+  `Ingested es Value`; the framework projects each `Ingested` to the
+  handler-facing `Message` itself.
+- The bundled example (`shibuya-pgmq-example`) and benchmark
+  (`shibuya-pgmq-adapter-bench`), plus the README and getting-started guide,
+  were updated to the `shibuya-core 0.8.0.0` API (`runApp defaultAppConfig`, the
+  `Message` handler pattern, `ProcessorId` from `Shibuya.App`). Neither the
+  example nor the benchmark is published to Hackage.
+
 ## 0.10.0.0 — 2026-07-04
 
 ### Features

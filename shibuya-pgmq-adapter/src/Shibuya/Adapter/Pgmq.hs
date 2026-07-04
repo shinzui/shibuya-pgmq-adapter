@@ -6,7 +6,7 @@
 -- == Example Usage
 --
 -- @
--- import Shibuya.App (runApp, QueueProcessor (..))
+-- import Shibuya.App (runApp, defaultAppConfig, QueueProcessor (..))
 -- import Shibuya.Adapter.Pgmq
 -- import Pgmq.Effectful (runPgmq)
 -- import Hasql.Pool qualified as Pool
@@ -22,7 +22,7 @@
 --         . runPgmq pool
 --         $ do
 --             Right adapter <- pgmqAdapter (mkPgmqAdapterEnv pool) config
---             result <- runApp IgnoreFailures 100
+--             result <- runApp defaultAppConfig
 --               [ (ProcessorId "orders", QueueProcessor adapter handleOrder)
 --               ]
 --             -- ...
@@ -194,7 +194,7 @@ import Streamly.Data.Unfold qualified as Unfold
 --
 -- @
 -- Right adapter <- pgmqAdapter env config
--- runApp IgnoreFailures 100
+-- runApp defaultAppConfig
 --   [ (ProcessorId "my-processor", QueueProcessor adapter myHandler)
 --   ]
 -- @

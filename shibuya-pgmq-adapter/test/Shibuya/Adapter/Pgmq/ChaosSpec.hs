@@ -39,8 +39,11 @@ import Shibuya.Adapter.Pgmq
   )
 import Shibuya.Adapter.Pgmq.Internal (mkIngested)
 import Shibuya.App
-  ( ShutdownConfig (..),
+  ( AppConfig (..),
+    ProcessorId (..),
+    ShutdownConfig (..),
     SupervisionStrategy (..),
+    defaultAppConfig,
     mkProcessor,
     runApp,
     stopAppGracefully,
@@ -49,7 +52,6 @@ import Shibuya.Core.Ack (AckDecision (..), DeadLetterReason (..), HaltReason (..
 import Shibuya.Core.AckHandle (AckHandle (..))
 import Shibuya.Core.Ingested (Ingested (..))
 import Shibuya.Handler (Handler)
-import Shibuya.Runner.Metrics (ProcessorId (..))
 import Shibuya.Telemetry.Effect (Tracing, runTracingNoop)
 import System.Environment (lookupEnv)
 import System.Timeout (timeout)
@@ -167,7 +169,7 @@ poisonMessageSpec = describe "Poison messages" $ do
       let handler = deadLetterHandler processedRef
           processor = mkProcessor adapter handler
 
-      result <- runApp IgnoreFailures 100 [(ProcessorId "dlq-test", processor)]
+      result <- runApp defaultAppConfig [(ProcessorId "dlq-test", processor)]
       case result of
         Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
         Right appHandle -> do
@@ -237,7 +239,7 @@ poisonMessageSpec = describe "Poison messages" $ do
       let handler = deadLetterHandler processedRef
           processor = mkProcessor adapter handler
 
-      result <- runApp IgnoreFailures 100 [(ProcessorId "dlq-trace-test", processor)]
+      result <- runApp defaultAppConfig [(ProcessorId "dlq-trace-test", processor)]
       case result of
         Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
         Right appHandle -> do
@@ -459,7 +461,7 @@ longHandlerSpec = describe "Long-running handlers" $ do
       let handler = slowHandler processedRef 2000000 -- 2 second delay
           processor = mkProcessor adapter handler
 
-      result <- runApp IgnoreFailures 100 [(ProcessorId "slow-test", processor)]
+      result <- runApp defaultAppConfig [(ProcessorId "slow-test", processor)]
       case result of
         Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
         Right appHandle -> do
@@ -528,7 +530,7 @@ gracefulShutdownSpec = describe "Graceful shutdown" $ do
       let handler = slowHandler processedRef 50000 -- 0.05 second delay per message
           processor = mkProcessor adapter handler
 
-      appResult <- runApp IgnoreFailures 100 [(ProcessorId "drain-test", processor)]
+      appResult <- runApp defaultAppConfig [(ProcessorId "drain-test", processor)]
       case appResult of
         Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
         Right appHandle -> do
@@ -571,7 +573,7 @@ gracefulShutdownSpec = describe "Graceful shutdown" $ do
       let handler = countingHandler processedRef
           processor = mkProcessor adapter handler
 
-      appResult <- runApp IgnoreFailures 100 [(ProcessorId "stop-test", processor)]
+      appResult <- runApp defaultAppConfig [(ProcessorId "stop-test", processor)]
       case appResult of
         Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
         Right appHandle -> do
@@ -659,7 +661,7 @@ prefetchSpec = describe "Prefetch" $ do
       adapter <- requireAdapter pool config
       let handler = countingHandler processedRef
           processor = mkProcessor adapter handler
-      appResult <- runApp IgnoreFailures 100 [(ProcessorId "prefetch-test", processor)]
+      appResult <- runApp defaultAppConfig [(ProcessorId "prefetch-test", processor)]
       case appResult of
         Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
         Right appHandle -> do
@@ -787,7 +789,7 @@ prefetchSpec = describe "Prefetch" $ do
       adapter <- requireAdapter pool config
       let handler = slowHandler processedRef 10_000_000
           processor = mkProcessor adapter handler
-      appResult <- runApp IgnoreFailures 2 [(ProcessorId "noloss-test", processor)]
+      appResult <- runApp (AppConfig {strategy = IgnoreFailures, inboxSize = 2}) [(ProcessorId "noloss-test", processor)]
       case appResult of
         Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
         Right appHandle -> do
@@ -909,7 +911,7 @@ measureShutdownRelease pool q mprefetch = do
     adapter <- requireAdapter pool config
     let handler = slowHandler processedRef 400000 -- 0.4s per message
         processor = mkProcessor adapter handler
-    appResult <- runApp IgnoreFailures 2 [(ProcessorId "shutdown-measure", processor)]
+    appResult <- runApp (AppConfig {strategy = IgnoreFailures, inboxSize = 2}) [(ProcessorId "shutdown-measure", processor)]
     case appResult of
       Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
       Right appHandle -> do
