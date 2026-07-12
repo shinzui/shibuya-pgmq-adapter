@@ -227,8 +227,8 @@ pgmqSourceWithShutdown ::
   Stream (Eff es) (Ingested es Value)
 pgmqSourceWithShutdown env config shutdownVar =
   chunkStream
-    & Stream.filter (not . Vector.null)
     & Stream.takeWhileM keepChunk
+    & Stream.filter (not . Vector.null)
     & Stream.unfoldEach (Unfold.unfoldr Vector.uncons)
     & Stream.mapMaybeM (mkIngested env config)
   where

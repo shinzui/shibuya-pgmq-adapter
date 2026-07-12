@@ -502,6 +502,25 @@ longHandlerSpec = describe "Long-running handlers" $ do
 -- | Tests for graceful shutdown behavior.
 gracefulShutdownSpec :: SpecWith TestFixture
 gracefulShutdownSpec = describe "Graceful shutdown" $ do
+  it "drains an idle queue instead of waiting for the timeout" $ \TestFixture {pool, queueName, dlqName = _} -> do
+    let config =
+          (defaultConfig queueName)
+            { visibilityTimeout = 30,
+              batchSize = 1,
+              polling = StandardPolling {pollInterval = 0.1}
+            }
+
+    drained <- runAdapterIO pool $ runTracingNoop $ do
+      adapter <- requireAdapter pool config
+      appResult <- runApp defaultAppConfig [(ProcessorId "idle-drain-test", mkProcessor adapter (\_ -> pure AckOk))]
+      case appResult of
+        Left err -> liftIO $ expectationFailure ("Failed to start app: " <> show err) >> pure False
+        Right appHandle -> do
+          liftIO $ threadDelay 100000
+          stopAppGracefully ShutdownConfig {drainTimeout = 2} appHandle
+
+    drained `shouldBe` True
+
   it "processes in-flight messages during shutdown" $ \TestFixture {pool, queueName, dlqName = _} -> do
     -- Send multiple messages
     forM_ [1 .. 5 :: Int] $ \i ->
