@@ -16,12 +16,13 @@ module TmpPostgres
 where
 
 import Control.Exception (bracket)
+import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Time (secondsToDiffTime)
 import Data.Word (Word64)
+import Database.PostgreSQL.Migrate qualified as Migrate
 import EphemeralPg (StartError, connectionSettings, with)
-import Hasql.Connection qualified as Connection
 import Hasql.Connection.Settings qualified as Settings
 import Hasql.Pool qualified as Pool
 import Hasql.Pool.Config qualified as PoolConfig
@@ -101,18 +102,21 @@ runPgmqSession pool session = do
     Right a -> pure a
 
 -- | Install pgmq schema into a PostgreSQL database.
+--
+-- The database is always fresh, so the native pg-migrate runner applies the
+-- pgmq component from scratch; no predecessor ledger import is involved.
 installPgmqSchema :: Settings.Settings -> IO ()
 installPgmqSchema connSettings = do
-  connResult <- Connection.acquire connSettings
-  case connResult of
-    Left err -> error $ "Failed to connect for migration: " <> show err
-    Right conn -> do
-      result <- Connection.use conn Migration.migrate
-      Connection.release conn
-      case result of
-        Left sessionErr -> error $ "Migration session error: " <> show sessionErr
-        Right (Left migrationErr) -> error $ "Migration error: " <> show migrationErr
-        Right (Right ()) -> pure ()
+  component <- case Migration.pgmqMigrations of
+    Left defErr -> error $ "pgmq migration definition error: " <> show defErr
+    Right component -> pure component
+  plan <- case Migrate.migrationPlan (component :| []) of
+    Left planErr -> error $ "pgmq migration plan error: " <> show planErr
+    Right plan -> pure plan
+  result <- Migrate.runMigrationPlan Migrate.defaultRunOptions connSettings plan
+  case result of
+    Left migrationErr -> error $ "Migration error: " <> show migrationErr
+    Right _report -> pure ()
 
 -- | Create a connection pool from connection settings.
 createPool :: Settings.Settings -> IO Pool.Pool

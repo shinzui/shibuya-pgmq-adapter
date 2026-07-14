@@ -27,11 +27,13 @@ import BenchConfig (BenchConfig (..), PayloadSize (..), payloadBytes)
 import Control.Exception (bracket)
 import Data.Aeson (Value (..), object, (.=))
 import Data.ByteString (ByteString)
+import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TE
 import Data.Time (secondsToDiffTime)
 import Data.Word (Word64)
+import Database.PostgreSQL.Migrate qualified as Migrate
 import Hasql.Connection.Settings qualified as Settings
 import Hasql.Pool qualified as Pool
 import Hasql.Pool.Config qualified as PoolConfig
@@ -54,10 +56,14 @@ withBenchPool config action = do
   pool <- createPool config.connectionString
   bracket (pure pool) Pool.release action
 
+-- | Hasql connection settings for a connection string.
+connectionSettings :: ByteString -> Settings.Settings
+connectionSettings connStr = Settings.connectionString (TE.decodeUtf8 connStr)
+
 -- | Create a connection pool from a connection string.
 createPool :: ByteString -> IO Pool.Pool
 createPool connStr = do
-  let connSettings = Settings.connectionString (TE.decodeUtf8 connStr)
+  let connSettings = connectionSettings connStr
       poolConfig =
         PoolConfig.settings
           [ PoolConfig.size 20,
@@ -77,13 +83,27 @@ runSession pool session = do
     Right a -> pure a
 
 -- | Install pgmq schema into a PostgreSQL database.
-installPgmqSchema :: Pool.Pool -> IO ()
-installPgmqSchema pool = do
-  result <- Pool.use pool Migration.migrate
+--
+-- Runs the native pg-migrate component from pgmq-migration. The runner owns its
+-- own connection (it takes settings rather than the benchmark pool) so that the
+-- migration advisory lock is held outside the pool's lifecycle. Applying an
+-- already-migrated database is a no-op.
+--
+-- A benchmark database still carrying a pre-0.4 @public.schema_migrations@
+-- ledger must have that history imported first, or be reset; see the bench
+-- README.
+installPgmqSchema :: ByteString -> IO ()
+installPgmqSchema connStr = do
+  component <- case Migration.pgmqMigrations of
+    Left defErr -> error $ "pgmq migration definition error: " <> show defErr
+    Right component -> pure component
+  plan <- case Migrate.migrationPlan (component :| []) of
+    Left planErr -> error $ "pgmq migration plan error: " <> show planErr
+    Right plan -> pure plan
+  result <- Migrate.runMigrationPlan Migrate.defaultRunOptions (connectionSettings connStr) plan
   case result of
-    Left sessionErr -> error $ "Migration session error: " <> show sessionErr
-    Right (Left migrationErr) -> error $ "Migration error: " <> show migrationErr
-    Right (Right ()) -> pure ()
+    Left migrationErr -> error $ "Migration error: " <> show migrationErr
+    Right _report -> pure ()
 
 -- | Create a benchmark queue with a given base name.
 createBenchQueue :: Pool.Pool -> QueueName -> IO ()

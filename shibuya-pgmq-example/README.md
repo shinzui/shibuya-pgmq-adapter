@@ -19,8 +19,21 @@ This package provides two executables:
 
 ## Prerequisites
 
-- PostgreSQL with PGMQ extension installed
+- PostgreSQL. The PGMQ extension is not required: on startup both apps call
+  `Example.Database.createQueues`, which installs the PGMQ schema with `pgmq-migration` and then
+  creates the queues. Installing the extension anyway is fine — the migration is a no-op against an
+  already-migrated database.
 - (Optional) Jaeger for distributed tracing
+
+`Example.Database.installSchema` shows the `pgmq-migration` 0.4 pattern end to end: build a
+`pg-migrate` plan from `Pgmq.Migration.pgmqMigrations` and run it. Note it takes the connection
+string, not the pool — the runner acquires its own connection for the migration advisory lock.
+
+If you are reusing a database created by an older version of this example (one with a
+`public.schema_migrations` table), the native runner will refuse to reinstall over it. Either drop
+the `pgmq` schema and `public.schema_migrations` and start clean, or import the old ledger as
+described in [Installing the PGMQ
+schema](../docs/user/pgmq-getting-started.md#installing-the-pgmq-schema).
 
 ## Quick Start
 

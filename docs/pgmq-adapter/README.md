@@ -194,9 +194,15 @@ Trade-offs:
 ## Requirements
 
 - **GHC 9.12+** (GHC2024 language standard)
-- **PostgreSQL** with pgmq extension installed
+- **PostgreSQL** with the pgmq schema installed, either as the extension or via `pgmq-migration`
 - **pgmq 1.8.0+** for FIFO support
+- **pgmq-\* 0.4** package family
 - **effectful 2.6+** for effect system integration
+
+Installing the schema with `pgmq-migration` 0.4 means composing its `pg-migrate` component into a
+plan; a database created by `pgmq-migration` 0.3 or earlier must have its `hasql-migration` ledger
+imported first. See [Installing the PGMQ
+schema](../user/pgmq-getting-started.md#installing-the-pgmq-schema).
 
 ### Key Dependencies
 

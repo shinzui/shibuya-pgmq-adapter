@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+- Requires the `pgmq-*` 0.4 package family: `pgmq-core ^>=0.4`, `pgmq-effectful ^>=0.4`,
+  and `pgmq-hasql ^>=0.4` in the library (plus `pgmq-migration ^>=0.4` and
+  `pg-migrate ^>=1.1` in the test stanza), up from `^>=0.3`.
+- The adapter's own API is unchanged, but consumers that install the PGMQ schema with
+  `pgmq-migration` must migrate: 0.4 replaced the `migrate` / `upgrade` / `validate`
+  runner with a `pg-migrate` component. `Pgmq.Migration` now exports only
+  `pgmqMigrations`, `MigrationComponent`, and `DefinitionError`; an application composes
+  the component into a plan with `migrationPlan` and runs it with `runMigrationPlan`,
+  which takes hasql connection settings rather than a `Pool` or `Connection`.
+- A database created by `pgmq-migration` 0.3 or earlier must have its
+  `public.schema_migrations` ledger imported once via
+  `Pgmq.Migration.History.HasqlMigration` before the native runner takes over — the
+  native runner keeps its own ledger and does not read the old table. See
+  [Installing the PGMQ schema](../docs/user/pgmq-getting-started.md#installing-the-pgmq-schema).
+
 ## 0.11.0.0 — 2026-07-04
 
 Paired with `shibuya-core 0.8.0.1`.

@@ -329,7 +329,7 @@ runDefaultMain = do
 
   withDatabasePool connStr $ \pool -> do
     Text.putStrLn "Creating queues if needed..."
-    createQueues pool
+    createQueues connStr pool
     Text.putStrLn ""
 
     -- Run with tracing (real or no-op depending on config)
@@ -365,7 +365,7 @@ runOneShotMain args = do
 
   withDatabasePool connStr $ \pool -> do
     Text.putStrLn "Creating queues if needed..."
-    createQueues pool
+    createQueues connStr pool
 
     let payload =
           MessageBody $

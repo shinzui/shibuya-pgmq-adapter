@@ -8,7 +8,7 @@ import Bench.Raw qualified as Raw
 import Bench.Read qualified as Read
 import Bench.Send qualified as Send
 import Bench.Throughput qualified as Throughput
-import BenchConfig (loadConfig)
+import BenchConfig (BenchConfig (..), loadConfig)
 import BenchSetup (installPgmqSchema, withBenchPool)
 import Test.Tasty.Bench (defaultMain)
 
@@ -17,7 +17,7 @@ main = do
   config <- loadConfig
   withBenchPool config $ \pool -> do
     -- Install pgmq schema (idempotent)
-    installPgmqSchema pool
+    installPgmqSchema config.connectionString
 
     -- Run all benchmarks
     defaultMain

@@ -25,11 +25,13 @@ import Control.Monad (forever, unless)
 import Data.Aeson (Value, object, (.=))
 import Data.ByteString.Char8 qualified as BS
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Word (Word64)
+import Database.PostgreSQL.Migrate qualified as Migrate
 import Effectful (IOE, liftIO, runEff, (:>))
 import Effectful.Error.Static (runErrorNoCallStack)
 import GHC.Stats (RTSStats (..), getRTSStats, getRTSStatsEnabled)
@@ -275,7 +277,7 @@ main = do
   pool <- createPool config.connectionString
   putStrLn "Connected to PostgreSQL"
 
-  installSchema pool
+  installSchema config.connectionString
   putStrLn "PGMQ schema installed"
 
   let queueName = case parseQueueName "endurance_test" of
@@ -420,13 +422,24 @@ createPool connStr = do
           ]
   Pool.acquire poolConfig
 
-installSchema :: Pool.Pool -> IO ()
-installSchema pool = do
-  result <- Pool.use pool Migration.migrate
+-- | Install the pgmq schema via the native pg-migrate component.
+--
+-- The runner takes connection settings rather than the endurance pool: it
+-- acquires its own connection for the migration advisory lock. Re-running
+-- against an already-migrated database is a no-op.
+installSchema :: BS.ByteString -> IO ()
+installSchema connStr = do
+  component <- case Migration.pgmqMigrations of
+    Left err -> error $ "pgmq migration definition error: " <> show err
+    Right component -> pure component
+  plan <- case Migrate.migrationPlan (component :| []) of
+    Left err -> error $ "pgmq migration plan error: " <> show err
+    Right plan -> pure plan
+  let connSettings = Settings.connectionString (Text.pack (BS.unpack connStr))
+  result <- Migrate.runMigrationPlan Migrate.defaultRunOptions connSettings plan
   case result of
-    Left err -> error $ "Migration session error: " <> show err
-    Right (Left err) -> error $ "Migration error: " <> show err
-    Right (Right ()) -> pure ()
+    Left err -> error $ "Migration error: " <> show err
+    Right _report -> pure ()
 
 createQueue :: Pool.Pool -> QueueName -> IO ()
 createQueue pool qName = do

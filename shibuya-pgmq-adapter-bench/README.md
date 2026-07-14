@@ -4,8 +4,17 @@ Comprehensive benchmarks for `shibuya-pgmq-adapter` using [tasty-bench](https://
 
 ## Prerequisites
 
-- PostgreSQL running with pgmq schema installed
+- PostgreSQL. The benchmark harness installs the pgmq schema itself on startup
+  (`BenchSetup.installPgmqSchema`, via `pgmq-migration`'s `pg-migrate` component), so a plain
+  database is enough. Re-running against an already-migrated database is a no-op.
 - `PG_CONNECTION_STRING` environment variable set
+
+A benchmark database created before the `pgmq-migration` 0.4 upgrade still carries a
+`public.schema_migrations` ledger, which the native runner does not read and will not install over.
+The quickest fix for a throwaway benchmark database is to drop the `pgmq` schema and
+`public.schema_migrations` and let the harness reinstall; to preserve it, import the ledger as
+described in [Installing the PGMQ
+schema](../docs/user/pgmq-getting-started.md#installing-the-pgmq-schema).
 
 ## Running Benchmarks
 

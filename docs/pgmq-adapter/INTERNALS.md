@@ -709,7 +709,9 @@ integration and fault-injection paths exercise real pgmq behavior.
 ### Integration Tests
 
 `IntegrationSpec` and `ChaosSpec` run end-to-end against an ephemeral PostgreSQL
-instance (started via `TmpPostgres`) with the pgmq extension, covering:
+instance (started via `TmpPostgres`). The pgmq schema is installed without the
+extension: `TmpPostgres` composes `pgmq-migration`'s `pg-migrate` component into a
+plan and runs it against the fresh database. Coverage:
 
 1. End-to-end message processing
 2. Visibility timeout behavior

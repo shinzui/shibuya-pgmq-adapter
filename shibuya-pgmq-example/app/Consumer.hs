@@ -325,7 +325,7 @@ runDefaultMain = do
   withDatabasePool connectionString $ \pool -> do
     Text.putStrLn "Connected to PostgreSQL"
     Text.putStrLn "Creating queues if needed..."
-    createQueues pool
+    createQueues connectionString pool
     Text.putStrLn "Queues ready"
     Text.putStrLn ""
 
@@ -348,7 +348,7 @@ runBackoffDemoMain policy = do
   withDatabasePool connectionString $ \pool -> do
     Text.putStrLn "Connected to PostgreSQL"
     Text.putStrLn "Creating queues if needed..."
-    createQueues pool
+    createQueues connectionString pool
     Text.putStrLn "Queues ready (including backoff_demo)"
     Text.putStrLn ""
 

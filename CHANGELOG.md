@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+- Requires the `pgmq-*` 0.4 package family (`pgmq-core`, `pgmq-hasql`, `pgmq-effectful`, and — for the test, benchmark, and example stanzas — `pgmq-migration`), up from 0.3. The adapter's own public API is unchanged; the break is in how consumers install the PGMQ schema.
+- `pgmq-migration` 0.4 removed its `migrate` / `upgrade` / `validate` runner and now exports a `pg-migrate` component instead: `Pgmq.Migration` exposes only `pgmqMigrations`, `MigrationComponent`, and `DefinitionError`. Consumers compose the component into a `pg-migrate` plan (`migrationPlan`) and run it (`runMigrationPlan`), which lets one ledger own both pgmq's schema and the application's. The runner takes hasql connection *settings* rather than a `Pool` or `Connection`, because it acquires its own connection to hold the migration advisory lock.
+- A database created by `pgmq-migration` 0.3 or earlier tracks migrations in `public.schema_migrations`. The native runner keeps its own ledger and does not read that table, so such a database must have its history imported once through `Pgmq.Migration.History.HasqlMigration` (`DirectFullInstallHistory`, or the explicitly opted-in `EquivalentTwoStepUpgradeHistory`) before the native runner takes over. See [Installing the PGMQ schema](docs/user/pgmq-getting-started.md#installing-the-pgmq-schema).
+
+### Other Changes
+
+- Dropped the `hasql-migration` `source-repository-package` pin from `cabal.project`. It existed only because `pgmq-migration` 0.3 depended on `hasql-migration`, whose Hackage release does not build against hasql 1.10; nothing in the project depends on it now. (`pg-migrate-import-hasql-migration` reads `schema_migrations` through hasql directly rather than depending on the package.)
+- Ported the schema installation in the test harness (`TmpPostgres`), benchmarks (`BenchSetup`), endurance test, and example app to the `pg-migrate` plan API. The example's `createQueues` and `installSchema` now take the connection string instead of the pool, matching the runner's connection ownership.
+- Updated the getting-started guide, adapter README, example README, and benchmark README for the new schema-installation flow and the ledger-import path.
+
 ## 0.11.0.0 — 2026-07-04
 
 ### Breaking Changes
