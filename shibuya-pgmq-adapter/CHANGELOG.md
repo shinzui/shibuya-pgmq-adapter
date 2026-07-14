@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.12.0.0 — 2026-07-14
+
+Driven by the `pgmq-hs` 0.4 release. Still paired with `shibuya-core 0.8.0.1`
+(unchanged bound).
 
 ### Breaking Changes
 
@@ -18,6 +21,14 @@
   `Pgmq.Migration.History.HasqlMigration` before the native runner takes over — the
   native runner keeps its own ledger and does not read the old table. See
   [Installing the PGMQ schema](../docs/user/pgmq-getting-started.md#installing-the-pgmq-schema).
+
+### Bug Fixes
+
+- Idle streams now observe shutdown. The shutdown gate was checked only *after*
+  empty poll chunks were filtered out, so a processor with nothing to consume kept
+  polling until it was forcibly cancelled instead of finishing on request. The gate
+  is now checked before the empty-chunk filter, covered by a PostgreSQL lifecycle
+  regression test.
 
 ## 0.11.0.0 — 2026-07-04
 

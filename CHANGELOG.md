@@ -1,12 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.12.0.0 — 2026-07-14
+
+Driven by the `pgmq-hs` 0.4 release. Still paired with `shibuya-core 0.8.0.1` (unchanged bound).
 
 ### Breaking Changes
 
 - Requires the `pgmq-*` 0.4 package family (`pgmq-core`, `pgmq-hasql`, `pgmq-effectful`, and — for the test, benchmark, and example stanzas — `pgmq-migration`), up from 0.3. The adapter's own public API is unchanged; the break is in how consumers install the PGMQ schema.
 - `pgmq-migration` 0.4 removed its `migrate` / `upgrade` / `validate` runner and now exports a `pg-migrate` component instead: `Pgmq.Migration` exposes only `pgmqMigrations`, `MigrationComponent`, and `DefinitionError`. Consumers compose the component into a `pg-migrate` plan (`migrationPlan`) and run it (`runMigrationPlan`), which lets one ledger own both pgmq's schema and the application's. The runner takes hasql connection *settings* rather than a `Pool` or `Connection`, because it acquires its own connection to hold the migration advisory lock.
 - A database created by `pgmq-migration` 0.3 or earlier tracks migrations in `public.schema_migrations`. The native runner keeps its own ledger and does not read that table, so such a database must have its history imported once through `Pgmq.Migration.History.HasqlMigration` (`DirectFullInstallHistory`, or the explicitly opted-in `EquivalentTwoStepUpgradeHistory`) before the native runner takes over. See [Installing the PGMQ schema](docs/user/pgmq-getting-started.md#installing-the-pgmq-schema).
+
+### Bug Fixes
+
+- Idle streams now observe shutdown. The adapter checked the shutdown gate only *after* filtering empty poll chunks, so a processor with nothing to consume kept polling until it was forcibly cancelled instead of finishing on request. The gate is now checked before the empty-chunk filter, covered by a PostgreSQL lifecycle regression test.
 
 ### Other Changes
 
