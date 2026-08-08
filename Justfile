@@ -53,3 +53,12 @@ example-consumer:
 [group("build")]
 fmt:
   nix fmt
+
+# --- Docs ---
+
+# Validate the capability catalog against its pinned profile.
+[group("docs")]
+check-capabilities:
+  mori validate
+  okf validate docs/capabilities --profile docs/capabilities/profile.dhall --profile-enforce --log-enforce
+  okf graph docs/capabilities
