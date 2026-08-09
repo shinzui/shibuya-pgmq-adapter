@@ -550,7 +550,10 @@ mkLease config msg = do
                 messageId = msg.messageId,
                 visibilityTime = target
               }
-        liftIO $ writeIORef lastVtRef updated.visibilityTime
+        case updated of
+          Nothing -> pure ()
+          Just updatedMessage ->
+            liftIO $ writeIORef lastVtRef updatedMessage.visibilityTime
     }
 ```
 
@@ -560,8 +563,12 @@ mkLease config msg = do
 with an **absolute** timestamp (rather than the offset-based
 `changeVisibilityTimeout`), so the timeout is monotone and never shortened by a
 later, shorter extension. The call is wrapped in `retryingTransient
-config.ackRetry`, and the returned VT is written back to `lastVtRef`. Handlers
-call `leaseExtend` to extend the visibility timeout for long-running work.
+config.ackRetry`. Under pgmq-hs 0.5, `setVisibilityTimeoutAt` returns `Nothing`
+when another operation has already deleted, archived, or popped the message;
+that race is a benign no-op and leaves `lastVtRef` unchanged. Only a returned
+message confirms that PostgreSQL extended the lease, so only its visibility
+time is written back to `lastVtRef`. Handlers call `leaseExtend` to extend the
+visibility timeout for long-running work.
 
 ### nominalToSeconds
 

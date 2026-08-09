@@ -196,7 +196,7 @@ Trade-offs:
 - **GHC 9.12+** (GHC2024 language standard)
 - **PostgreSQL** with the pgmq schema installed, either as the extension or via `pgmq-migration`
 - **pgmq 1.8.0+** for FIFO support
-- **pgmq-\* 0.4** package family
+- **pgmq-\* 0.5** package family
 - **effectful 2.6+** for effect system integration
 
 Installing the schema with `pgmq-migration` 0.4 means composing its `pg-migrate` component into a

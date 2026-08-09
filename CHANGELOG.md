@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.13.0.0 — 2026-08-09
+
+Driven by the `pgmq-hs` 0.5 release. The adapter's own public function and record signatures are unchanged.
+
+### Breaking Changes
+
+- Requires the `pgmq-*` 0.5 package family (`pgmq-core`, `pgmq-hasql`, `pgmq-effectful`, and — for the test, benchmark, and example stanzas — `pgmq-migration`), up from 0.4.
+- The re-exported `parseQueueName` now accepts only `[a-z0-9_]{1,47}`. Existing databases must be checked for mixed-case `pgmq.meta` rows and transactionally remediated before rollout; see [Installing the PGMQ schema](docs/user/pgmq-getting-started.md#before-upgrading-to-pgmq--05).
+
+### Reliability
+
+- Lease extension now treats a message deleted, archived, or popped during the extension race as a successful no-op instead of surfacing a row-count decoder error.
+- Transient retries inherit pgmq-effectful 0.5's broader PostgreSQL SQLSTATE classification, including serialization, deadlock, lock-unavailable, shutdown/recovery, and resource-exhaustion failures.
+- Schema installation inherits pgmq-migration 0.5's notification crash-safety migration, which keeps insert notifications flowing after PostgreSQL crash recovery truncates throttle state.
+
 ## 0.12.0.0 — 2026-07-14
 
 Driven by the `pgmq-hs` 0.4 release. Still paired with `shibuya-core 0.8.0.1` (unchanged bound).

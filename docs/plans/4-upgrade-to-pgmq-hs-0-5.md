@@ -43,7 +43,7 @@ keeping failures at zero.
 
 - [x] (2026-08-09T13:41:14Z) M1. Re-verified Hackage and the upstream tags at 0.5.0.0, updated all 23 workspace bounds to `^>=0.5`, and bumped the adapter package to 0.13.0.0 while leaving the benchmark and example packages at 0.1.0.0.
 - [x] (2026-08-09T13:46:12Z) M2. Adapted lease extension to leave its confirmed deadline unchanged for `Nothing`, added the lost-row and public parser regressions, passed the PostgreSQL-backed suite with 154 examples and zero failures, and built every workspace component with tests and benchmarks enabled.
-- [ ] M3. Update requirements, operator guidance, internals documentation, and both changelogs for the breaking dependency upgrade.
+- [x] (2026-08-09T13:46:44Z) M3. Updated current requirements and the example's component-pattern wording, documented the 0.5 queue-name rule and pre-rollout remediation gate, aligned lease documentation with the benign lost-row race, and added 0.13.0.0 entries to both changelogs; the stale-0.4 audit found only deliberate historical references.
 - [ ] M4. Format, build every component, run the complete database-backed suite and repository checks, inspect the resolved dependency plan, and commit the finished upgrade.
 
 

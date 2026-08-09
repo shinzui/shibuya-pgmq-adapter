@@ -50,10 +50,11 @@ data PgmqAdapterConfig = PgmqAdapterConfig
 
 ### queueName
 
-The queue name must be valid according to pgmq naming rules. Use `parseQueueName` to validate:
+The queue name must contain 1 to 47 lowercase ASCII letters, digits, or underscores; equivalently,
+it must match `[a-z0-9_]{1,47}`. Use `parseQueueName` to validate:
 
 ```haskell
-case parseQueueName "my-queue" of
+case parseQueueName "my_queue" of
   Left err -> error $ "Invalid queue name: " <> err
   Right name -> defaultConfig name
 ```

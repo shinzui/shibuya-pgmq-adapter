@@ -68,7 +68,7 @@ handleLongRunning ingested = do
     Left err -> AckRetry (RetryDelay 60)
 ```
 
-The PGMQ adapter always provides a lease. Extending the lease uses pgmq's absolute visibility-timeout API and never shortens an already-extended lease.
+The PGMQ adapter always provides a lease. Extending the lease uses pgmq's absolute visibility-timeout API and never shortens an already-extended lease. If another operation has already deleted, archived, or popped the message, `leaseExtend` returns normally without changing the adapter's last confirmed deadline; it cannot extend or recover a nonexistent row.
 
 ## Tuning Guidelines
 

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.13.0.0 — 2026-08-09
+
+Driven by the `pgmq-hs` 0.5 release. The adapter remains paired with
+`shibuya-core 0.8.0.1`, and its own public function and record signatures are unchanged.
+
+### Breaking Changes
+
+- Requires `pgmq-core ^>=0.5`, `pgmq-effectful ^>=0.5`, and `pgmq-hasql ^>=0.5` in
+  the library, plus `pgmq-migration ^>=0.5` in the test stanza, up from the 0.4 family.
+- The re-exported `parseQueueName` now accepts only non-empty names of at most 47
+  lowercase ASCII letters, digits, or underscores (`[a-z0-9_]{1,47}`). Operators must
+  detect and transactionally remediate mixed-case `pgmq.meta` rows before rollout; see
+  [Installing the PGMQ schema](../docs/user/pgmq-getting-started.md#before-upgrading-to-pgmq--05).
+
+### Reliability
+
+- `mkLease` handles pgmq-hs 0.5's `Maybe Message` visibility-timeout result. When a
+  message was deleted, archived, or popped before extension reached it, `leaseExtend`
+  returns normally and leaves the last confirmed visibility deadline unchanged. A live
+  row still advances that deadline from the value PostgreSQL returns.
+- The existing bounded retry wrapper inherits pgmq-effectful 0.5's broader transient
+  SQLSTATE classification: serialization failures, deadlocks, lock-unavailable errors,
+  server shutdown/recovery, and class 53 resource errors are now eligible for retry.
+- The test harness and downstream components inherit pgmq-migration 0.5's notification
+  crash-safety migration, which fails open after crash recovery truncates the unlogged
+  throttle table so insert notifications continue until reconciliation restores it.
+
+### Tests
+
+- Added a PostgreSQL-backed regression for extending a lease after its message is deleted
+  and a public-boundary regression for lowercase, uppercase, and empty queue names.
+
 ## 0.12.0.0 — 2026-07-14
 
 Driven by the `pgmq-hs` 0.4 release. Still paired with `shibuya-core 0.8.0.1`

@@ -21,7 +21,7 @@ build-depends:
   hasql-pool,
 ```
 
-The adapter requires the `pgmq-*` 0.4 package family.
+The adapter requires the `pgmq-*` 0.5 package family.
 
 ## Installing the PGMQ schema
 
@@ -32,6 +32,25 @@ As of `pgmq-migration` 0.4 this is a [`pg-migrate`](https://hackage.haskell.org/
 component rather than a self-contained runner. `pgmq-migration` no longer migrates anything on its
 own: it *exports* the pgmq migrations, and your application composes them into a plan alongside its
 own migrations and runs that plan. This is what lets one ledger own both pgmq's schema and yours.
+
+### Before upgrading to pgmq-* 0.5
+
+Version 0.5 accepts queue names only when they contain 1 to 47 lowercase ASCII letters, digits, or
+underscores. Before deploying it against an existing database, run this read-only query:
+
+```sql
+SELECT queue_name, lower(queue_name) AS canonical_name
+FROM pgmq.meta
+WHERE queue_name <> lower(queue_name);
+```
+
+An empty result means no mixed-case remediation is needed. A non-empty result must be backed up and
+remediated before upgrading. Do not silently lowercase names or directly update or delete
+`pgmq.meta`: differently-cased metadata rows may already share one physical queue table, while
+topic bindings and notification-throttle rows refer to the metadata and can be cascaded away.
+Follow the transactional remediation owned by `mori://shinzui/pgmq-hs` in that project's
+`docs/design/016-queue-name-validation.md`. An artifact-level Mori URI for that design document is
+pending, so the canonical project URI and project-relative path are given together here.
 
 ```haskell
 import Data.List.NonEmpty (NonEmpty ((:|)))

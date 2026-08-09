@@ -25,7 +25,7 @@ This package provides two executables:
   already-migrated database.
 - (Optional) Jaeger for distributed tracing
 
-`Example.Database.installSchema` shows the `pgmq-migration` 0.4 pattern end to end: build a
+`Example.Database.installSchema` shows the `pgmq-migration` 0.4 and later component pattern end to end: build a
 `pg-migrate` plan from `Pgmq.Migration.pgmqMigrations` and run it. Note it takes the connection
 string, not the pool — the runner acquires its own connection for the migration advisory lock.
 
