@@ -44,7 +44,7 @@ keeping failures at zero.
 - [x] (2026-08-09T13:41:14Z) M1. Re-verified Hackage and the upstream tags at 0.5.0.0, updated all 23 workspace bounds to `^>=0.5`, and bumped the adapter package to 0.13.0.0 while leaving the benchmark and example packages at 0.1.0.0.
 - [x] (2026-08-09T13:46:12Z) M2. Adapted lease extension to leave its confirmed deadline unchanged for `Nothing`, added the lost-row and public parser regressions, passed the PostgreSQL-backed suite with 154 examples and zero failures, and built every workspace component with tests and benchmarks enabled.
 - [x] (2026-08-09T13:46:44Z) M3. Updated current requirements and the example's component-pattern wording, documented the 0.5 queue-name rule and pre-rollout remediation gate, aligned lease documentation with the benign lost-row race, and added 0.13.0.0 entries to both changelogs; the stale-0.4 audit found only deliberate historical references.
-- [ ] M4. Format, build every component, run the complete database-backed suite and repository checks, inspect the resolved dependency plan, and commit the finished upgrade.
+- [x] (2026-08-09T13:48:42Z) M4. Confirmed formatting was stable, rebuilt the complete workspace, reran 154 database-backed examples with zero failures, verified the resolved graph contains exactly the four consumed pgmq packages at 0.5.0.0, and passed capability validation plus `nix flake check`.
 
 
 ## Surprises & Discoveries
@@ -85,7 +85,39 @@ keeping failures at zero.
 
 ## Outcomes & Retrospective
 
-(To be filled during and after implementation.)
+The upgrade is complete. All 23 existing pgmq dependency declarations now use the 0.5
+family, the published adapter is 0.13.0.0, and the example and benchmark packages retain
+their independent 0.1.0.0 versions. Cabal resolved the released Hackage packages without a
+local source override:
+
+```text
+pgmq-core-0.5.0.0
+pgmq-effectful-0.5.0.0
+pgmq-hasql-0.5.0.0
+pgmq-migration-0.5.0.0
+```
+
+Lease extension preserves its successful-live-row behavior and now returns normally when
+the target message disappeared during the database race. The new PostgreSQL-backed
+example proves that behavior after a real delete, and the public-boundary example proves
+that lowercase `orders` succeeds while uppercase `Orders` and the empty name fail. The
+final suite result was:
+
+```text
+Finished in 37.8606 seconds
+154 examples, 0 failures
+Test suite shibuya-pgmq-adapter-test: PASS
+```
+
+The user and operator documentation now agrees with the code: current requirements say
+0.5, queue names are documented as `[a-z0-9_]{1,47}`, mixed-case metadata has a read-only
+detection query and an upstream transactional remediation path, and lease loss is
+described as a benign no-op rather than a recoverable extension. Both changelogs identify
+the breaking dependency-family upgrade and its inherited reliability fixes.
+
+`nix fmt` checked 41 files with no changes, the whole-workspace Cabal build was up to date,
+`just check-capabilities` validated all six capability concepts, and `nix flake check`
+passed the aarch64-darwin pre-commit and treefmt checks. Nothing remains from this plan.
 
 
 ## Context and Orientation
