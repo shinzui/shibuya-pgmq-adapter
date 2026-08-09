@@ -41,8 +41,8 @@ keeping failures at zero.
 
 ## Progress
 
-- [ ] M1. Re-verify the latest `pgmq-hs` release, update all workspace bounds to the 0.5 family, and bump the adapter package to 0.13.0.0.
-- [ ] M2. Adapt lease extension to the 0.5 `Maybe Message` result and add live-database and queue-name regression coverage.
+- [x] (2026-08-09T13:41:14Z) M1. Re-verified Hackage and the upstream tags at 0.5.0.0, updated all 23 workspace bounds to `^>=0.5`, and bumped the adapter package to 0.13.0.0 while leaving the benchmark and example packages at 0.1.0.0.
+- [x] (2026-08-09T13:46:12Z) M2. Adapted lease extension to leave its confirmed deadline unchanged for `Nothing`, added the lost-row and public parser regressions, passed the PostgreSQL-backed suite with 154 examples and zero failures, and built every workspace component with tests and benchmarks enabled.
 - [ ] M3. Update requirements, operator guidance, internals documentation, and both changelogs for the breaking dependency upgrade.
 - [ ] M4. Format, build every component, run the complete database-backed suite and repository checks, inspect the resolved dependency plan, and commit the finished upgrade.
 

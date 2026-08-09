@@ -1,6 +1,8 @@
 module Shibuya.Adapter.Pgmq.ConfigSpec (spec) where
 
-import Pgmq.Types (parseQueueName, parseRoutingKey)
+import Data.Either (isLeft, isRight)
+import Pgmq.Types (parseRoutingKey)
+import Shibuya.Adapter.Pgmq (parseQueueName)
 import Shibuya.Adapter.Pgmq.Config
 import Test.Hspec
 
@@ -12,6 +14,7 @@ spec = do
   validateConfigSpec
   deadLetterTargetSpec
   smartConstructorSpec
+  queueNameBoundarySpec
 
 -- | Tests for defaultConfig
 defaultConfigSpec :: Spec
@@ -173,3 +176,10 @@ smartConstructorSpec = describe "Smart constructors" $ do
     it "sets includeMetadata correctly" $ do
       let config = topicDeadLetter routingKey False
       config.includeMetadata `shouldBe` False
+
+queueNameBoundarySpec :: Spec
+queueNameBoundarySpec = describe "parseQueueName" $ do
+  it "accepts lowercase names and rejects uppercase and empty names" $ do
+    parseQueueName "orders" `shouldSatisfy` isRight
+    parseQueueName "Orders" `shouldSatisfy` isLeft
+    parseQueueName "" `shouldSatisfy` isLeft

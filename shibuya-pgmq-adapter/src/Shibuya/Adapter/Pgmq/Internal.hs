@@ -202,7 +202,9 @@ mkLease config msg = do
                     messageId = msg.messageId,
                     visibilityTime = target
                   }
-          liftIO $ writeIORef lastVtRef updated.visibilityTime
+          case updated of
+            Nothing -> pure ()
+            Just updatedMessage -> liftIO $ writeIORef lastVtRef updatedMessage.visibilityTime
       }
 
 -- | Create an AckHandle for a message.

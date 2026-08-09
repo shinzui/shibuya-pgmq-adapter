@@ -26,9 +26,12 @@ import Pgmq.Types (MessageBody (..), QueueName)
 import Shibuya.Adapter.Pgmq.Config
   ( PgmqAdapterConfig (..),
     PollingConfig (..),
+    defaultConfig,
     defaultPollRetryConfig,
   )
 import Shibuya.Adapter.Pgmq.Convert (pgmqMessageToEnvelope)
+import Shibuya.Adapter.Pgmq.Internal (mkLease)
+import Shibuya.Core.Lease (Lease (..))
 import Shibuya.Core.Types (Envelope (..))
 import System.Environment (lookupEnv)
 import Test.Hspec
@@ -236,6 +239,44 @@ visibilityTimeoutSpec = describe "Visibility timeout" $ do
             }
       pure $ Vector.length msgs
     count `shouldBe` 1
+
+  it "lease extension is a no-op after the message is deleted" $ \TestFixture {pool, queueName, dlqName = _} -> do
+    runPgmqSession pool $ do
+      _ <-
+        Sessions.sendMessage $
+          SendMessage
+            { queueName = queueName,
+              messageBody = MessageBody (String "lease-race-test"),
+              delay = Just 0
+            }
+      pure ()
+
+    runAdapterIO pool $ do
+      msgs <-
+        PgmqEff.readMessage $
+          ReadMessage
+            { queueName = queueName,
+              delay = 30,
+              batchSize = Just 1,
+              conditional = Nothing
+            }
+      case Vector.uncons msgs of
+        Just (msg, _) -> do
+          lease <- mkLease (defaultConfig queueName) msg
+          _ <- PgmqEff.deleteMessage (MessageQuery queueName msg.messageId)
+          lease.leaseExtend 30
+        Nothing -> liftIO $ expectationFailure "Expected one message to construct a lease"
+
+    remaining <-
+      runPgmqSession pool $
+        Sessions.readMessage $
+          ReadMessage
+            { queueName = queueName,
+              delay = 30,
+              batchSize = Just 1,
+              conditional = Nothing
+            }
+    Vector.length remaining `shouldBe` 0
 
 -- | Retry handling tests (simulating AckRetry behavior)
 retryHandlingSpec :: SpecWith TestFixture
