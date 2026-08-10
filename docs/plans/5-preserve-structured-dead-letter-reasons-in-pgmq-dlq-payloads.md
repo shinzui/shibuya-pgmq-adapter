@@ -71,8 +71,9 @@ idempotent acknowledgement, retries, and trace propagation do not change.
   formatting, Cabal package checking, both strict OKF bundle checks, Mori validation, the complete
   workspace build, 161 database-backed examples, and `nix flake check`; then built and inspected
   the source and Hackage Haddock archives.
-- [ ] M4 — Run all repository and bundle gates, publish/tag the adapter release, close IR-1 with
-  evidence, and perform the required ADR-distillation review.
+- [x] (2026-08-10T21:26:56Z) M4 — published source and Haddocks to Hackage, pushed annotated tag
+  `v0.14.0.0` and the GitHub release, closed IR-1 with release/test evidence, marked this registered
+  plan complete, and found no established local ADR destination during the final distillation pass.
 
 
 ## Surprises & Discoveries
@@ -135,6 +136,10 @@ idempotent acknowledgement, retries, and trace propagation do not change.
   test stanzas, and the changed production/test sources. Hackage-mode Haddock generation completed
   with 100% coverage for `Config` and `Convert` and 85% for the umbrella module; its warnings are
   pre-existing unresolved or ambiguous cross-package links, not missing pages or build failures.
+- Hackage candidate inspection showed the exact 0.14 version, 0.9 bounds, and dated changelog before
+  publication. After source and documentation publication, Hackage's authoritative preferred
+  metadata listed 0.14.0.0 as a normal version. Annotated tag object `2b700942` peels to release
+  commit `3016523`, and the non-draft, non-prerelease GitHub release was published from that tag.
 
 
 ## Decision Log
@@ -195,7 +200,28 @@ idempotent acknowledgement, retries, and trace propagation do not change.
 
 ## Outcomes & Retrospective
 
-(To be filled during and after implementation.)
+The structured dead-letter contract shipped in `shibuya-pgmq-adapter` 0.14.0.0. Production now
+uses Shibuya's total public projections and writes the stable reason code and optional detail next
+to the unchanged compatibility rendering. All four released reason variants, both metadata modes,
+null versus empty detail, and JSON escaping have exact or property-derived coverage. A real adapter
+run proved the representative application values through PostgreSQL JSONB operators while the
+complete 161-example database suite kept routing, retry, trace, idempotence, shutdown, and
+transactional behavior green.
+
+The measured representative payload grew from 157 to 306 encoded bytes and from 168 to 321 JSONB
+bytes. Serialization remained small relative to transport (1.17 us, 8.5 KB allocated, roughly
+0.66% of the recorded single-send benchmark), and the 8 KiB case demonstrated linear copying. The
+operator documentation therefore makes the real trade explicit: detail is verbatim and must be
+bounded and safe; topic fan-out multiplies network, WAL, and storage; indexing remains an operator
+choice; and readers retain a legacy fallback throughout the dual-write window.
+
+The release is available at <https://hackage.haskell.org/package/shibuya-pgmq-adapter-0.14.0.0>
+with published Haddocks and at
+<https://github.com/shinzui/shibuya-pgmq-adapter/releases/tag/v0.14.0.0>. IR-1 is completed. The
+Keiro prerequisite is now consumable, but changing that repository remains deliberately assigned
+to its own workflow. Final ADR discovery again found neither `docs/adr/` nor a registered ADR
+bundle, so no incidental ADR format was invented; the durable dual-write/removal boundary remains
+in this plan and repository-local Plan 6.
 
 
 ## Context and Orientation
@@ -588,3 +614,5 @@ field after its adoption gates pass.
   documentation updates.
 - 2026-08-10: Recorded the dated 0.14.0.0 release notes, final repository gates, repeated complete
   database suite, and inspected Hackage source/documentation archives ahead of publication.
+- 2026-08-10: Recorded Hackage source/Haddock publication, immutable tag and GitHub release
+  verification, IR-1 completion, the final ADR-distillation result, and the completed retrospective.

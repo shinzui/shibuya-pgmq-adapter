@@ -4,18 +4,24 @@ title: Preserve application-defined dead-letter reasons in PGMQ DLQ payloads
 description: >-
   Adopt Shibuya's application-defined permanent-processing reason without duplicating its closed
   constructor vocabulary, and preserve the stable reason code and detail in PGMQ DLQ payloads.
-timestamp: 2026-08-10T20:57:14Z
+timestamp: 2026-08-10T21:26:56Z
 requestId: IR-1
-status: proposed
+status: completed
 origin: mori://shinzui/shibuya/packages/shibuya-core
 targetPlan: mori://shinzui/shibuya-pgmq-adapter/plans/5-preserve-structured-dead-letter-reasons-in-pgmq-dlq-payloads
+completedAt: 2026-08-10T21:26:56Z
+resolution: >-
+  Released shibuya-pgmq-adapter 0.14.0.0 on Hackage and under the immutable v0.14.0.0 tag,
+  with exact unit/property/PostgreSQL transport evidence and migration documentation.
 ---
 
 # Improvement Request: Preserve Application-Defined Dead-Letter Reasons in PGMQ DLQ Payloads
 
 ## Status
 
-Proposed.  This is the adapter rollout required after
+Completed in `shibuya-pgmq-adapter` 0.14.0.0, published at
+<https://hackage.haskell.org/package/shibuya-pgmq-adapter-0.14.0.0> and tagged in the
+repository as `v0.14.0.0`. This is the adapter rollout required after
 `mori://shinzui/shibuya/okf/improvement-requests/concepts/IR-2` and before
 `mori://shinzui/keiro/okf/improvement-requests/concepts/IR-9` can claim end-to-end PGMQ
 dead-letter support for declarative router selection.

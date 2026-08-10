@@ -12,7 +12,7 @@ in  AgentPlans.AgentPlansCatalog::{
         , kind = AgentPlans.PlanKind.ExecPlan
         , file =
             "docs/plans/5-preserve-structured-dead-letter-reasons-in-pgmq-dlq-payloads.md"
-        , status = AgentPlans.PlanStatus.InProgress
+        , status = AgentPlans.PlanStatus.Complete
         , summary = Some
             "Dual-write stable dead-letter codes and details into PGMQ DLQ payloads"
         }
