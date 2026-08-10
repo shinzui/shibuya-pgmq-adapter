@@ -1,10 +1,10 @@
 ---
 title: "Dead-letter routing"
 type: Capability
-description: "Opt-in dead-letter handling that moves a failed or over-retried message to a target queue (directly or by topic routing key), optionally with original metadata, in one PostgreSQL transaction with the source delete."
+description: "Opt-in dead-letter handling that moves a failed or over-retried message to a target queue in one PostgreSQL transaction, preserving a queryable reason code and optional detail alongside the compatibility rendering."
 generated:
-  by: claude-code/1.0
-  at: "2026-08-08T00:00:00Z"
+  by: codex/1.0
+  at: "2026-08-10T21:15:04Z"
 capabilityId: CAP-2
 provider: mori://shinzui/shibuya-pgmq-adapter
 status: shipped
@@ -19,16 +19,22 @@ requires:
 evidence:
   - kind: test
     resource: shibuya-pgmq-adapter/test/Shibuya/Adapter/Pgmq/ChaosSpec.hs
-    proves: Against a real PostgreSQL, a handler returning AckDeadLetter (and a poison message) moves the message to the configured DLQ, and AckDeadLetter is idempotent after a successful finalize.
+    proves: Against a real PostgreSQL, an ApplicationFailure reaches the DLQ with exact JSONB-queryable rendered, code, and detail fields; the source is deleted; routing, trace preservation, and idempotent finalize continue to pass.
+  - kind: test
+    resource: shibuya-pgmq-adapter/test/Shibuya/Adapter/Pgmq/ConvertSpec.hs
+    proves: Exact payload objects cover every released reason, both metadata modes, null versus empty detail, and Unicode and JSON-escaping cases.
   - kind: test
     resource: shibuya-pgmq-adapter/test/Shibuya/Adapter/Pgmq/PropertySpec.hs
-    proves: mkDlqPayload always carries original_message and dead_letter_reason keys, and includes the metadata keys iff includeMetadata is set.
+    proves: For generated reasons, mkDlqPayload derives the three reason fields from Shibuya's total public projections and includes metadata keys iff configured.
   - kind: test
     resource: shibuya-pgmq-adapter/test/Shibuya/Adapter/Pgmq/ConfigSpec.hs
     proves: The directDeadLetter and topicDeadLetter smart constructors build the expected DeadLetterTarget and includeMetadata.
   - kind: guide
     resource: docs/user/pgmq-dead-letter-queues.md
-    proves: How to configure DLQ handling, including metadata inclusion and topic-based routing.
+    proves: How to configure, query, index, and migrate the dual-written DLQ contract, including detail safety and topic fan-out cost.
+  - kind: benchmark
+    resource: shibuya-pgmq-adapter-bench/bench-dlq/Main.hs
+    proves: Fully encoded legacy and dual-write payloads have bounded constant work plus linear copying as application detail grows.
 ---
 
 # Dead-letter routing
@@ -45,8 +51,10 @@ The target is either a queue named directly (`directDeadLetter`) or a routing
 key resolved by topic routing (`topicDeadLetter`, see CAP-6,
 Topic-based routing). With
 `includeMetadata`, the DLQ payload carries the original message id, enqueue
-time, last-read time, read count, and headers alongside the original body and a
-`dead_letter_reason`.
+time, last-read time, read count, and headers alongside the original body. Every
+new DLQ body carries the canonical `dead_letter_reason` compatibility string,
+the stable `dead_letter_reason_code`, and an always-present
+`dead_letter_reason_detail` that is JSON null when no detail exists.
 
 ## Shortest usage
 
@@ -67,3 +75,12 @@ let config = (defaultConfig queueName)
   inherits the weaker evidence of CAP-6 (Topic-based routing).
 - **No DLQ means archive.** With `deadLetterConfig = Nothing`, `AckDeadLetter`
   archives the message via pgmq rather than routing it anywhere.
+- **The compatibility field is temporary.** Version 0.14 dual-writes the legacy
+  string and structured values. Readers should prefer code/detail and fall back
+  to the string for retained older rows.
+- **Detail and indexing are operator policy.** The adapter neither truncates
+  detail nor installs a JSONB index. Applications must keep detail bounded and
+  free of secrets, full payloads, raw SQL, and unrestricted backend errors.
+  Operators can index `message ->> 'dead_letter_reason_code'` for a large DLQ.
+  Topic routing multiplies encoding-adjacent network, WAL, and storage cost by
+  every matching queue.

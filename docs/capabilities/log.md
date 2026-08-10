@@ -1,5 +1,13 @@
 # Capability catalog log
 
+## 2026-08-10
+
+* **Enhance CAP-2 evidence**: Documented the 0.14 structured DLQ reason contract
+  and added exact unit, projection-derived property, real-PostgreSQL JSONB, and
+  payload serialization benchmark evidence. The capability now records the
+  temporary legacy dual-write, application-detail safety boundary, operator-owned
+  indexing, and topic fan-out cost.
+
 ## 2026-08-08
 * **Adopt**: Authored the initial capability catalog for `shibuya-pgmq-adapter`
   under the shared `coordination.capabilities` profile (okf-profiles v0.9.0).

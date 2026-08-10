@@ -20,9 +20,13 @@ import Data.Text qualified as Text
 import Data.Vector qualified as Vector
 import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Error.Static (Error, runErrorNoCallStack)
+import Hasql.Decoders qualified as D
 import Hasql.Pool qualified as Pool
+import Hasql.Session qualified as Session
+import Hasql.Statement qualified as Statement
 import Pgmq.Effectful (Pgmq, PgmqRuntimeError, runPgmq)
 import Pgmq.Effectful qualified as PgmqEff
+import Pgmq.Hasql.Encoders qualified as Encoders
 import Pgmq.Hasql.Sessions qualified as Sessions
 import Pgmq.Hasql.Statements.Types (ReadMessage (..), SendMessage (..), SendMessageWithHeaders (..))
 import Pgmq.Types (MessageBody (..), MessageHeaders (..), QueueName)
@@ -48,7 +52,7 @@ import Shibuya.App
     runApp,
     stopAppGracefully,
   )
-import Shibuya.Core.Ack (AckDecision (..), DeadLetterReason (..), HaltReason (..))
+import Shibuya.Core.Ack (AckDecision (..), DeadLetterCode, DeadLetterReason (..), HaltReason (..), mkDeadLetterCode)
 import Shibuya.Core.AckHandle (AckHandle (..))
 import Shibuya.Core.Ingested (Ingested (..))
 import Shibuya.Handler (Handler)
@@ -204,6 +208,95 @@ poisonMessageSpec = describe "Poison messages" $ do
               conditional = Nothing
             }
     Vector.length mainCount `shouldBe` 0
+
+  it "preserves an application reason as queryable JSONB fields" $ \TestFixture {pool, queueName, dlqName} -> do
+    let detail = "selected 101 recipients; configured limit is 100" :: Text.Text
+        rendered = "keiro.router.selection.recipient_overflow: " <> detail
+
+    runPgmqSession pool $ do
+      _ <-
+        Sessions.sendMessage $
+          SendMessage
+            { queueName = queueName,
+              messageBody = MessageBody (String "application-failure"),
+              delay = Just 0
+            }
+      pure ()
+
+    processedRef <- newIORef (0 :: Int)
+    let config =
+          (defaultConfig queueName)
+            { visibilityTimeout = 5,
+              batchSize = 1,
+              polling = StandardPolling {pollInterval = 0.1},
+              deadLetterConfig = Just $ directDeadLetter dlqName False
+            }
+
+    runAdapterIO pool $ runTracingNoop $ do
+      adapter <- requireAdapter pool config
+      let handler = applicationFailureHandler processedRef
+          processor = mkProcessor adapter handler
+
+      result <- runApp defaultAppConfig [(ProcessorId "application-dlq-test", processor)]
+      case result of
+        Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
+        Right appHandle -> do
+          liftIO $ waitForProcessed processedRef 1 3000000
+          _ <- stopAppGracefully ShutdownConfig {drainTimeout = 5} appHandle
+          pure ()
+
+    applicationInspection <- runPgmqSession pool $ inspectNextDlqPayload dlqName
+    applicationSize <- case applicationInspection of
+      Just (Just storedRendered, Just storedCode, Just storedDetail, storedSize) -> do
+        storedRendered `shouldBe` rendered
+        storedCode `shouldBe` "keiro.router.selection.recipient_overflow"
+        storedDetail `shouldBe` detail
+        storedSize `shouldSatisfy` (> 0)
+        pure storedSize
+      other -> expectationFailure ("expected queryable application DLQ fields, got " <> show other) >> pure 0
+
+    let legacyControl =
+          object
+            [ "original_message" .= String "application-failure",
+              "dead_letter_reason" .= rendered
+            ]
+    runPgmqSession pool $ do
+      _ <-
+        Sessions.sendMessage $
+          SendMessage
+            { queueName = dlqName,
+              messageBody = MessageBody legacyControl,
+              delay = Just 0
+            }
+      pure ()
+
+    legacyInspection <- runPgmqSession pool $ inspectNextDlqPayload dlqName
+    legacySize <- case legacyInspection of
+      Just (Just storedRendered, Nothing, Nothing, storedSize) -> do
+        storedRendered `shouldBe` rendered
+        storedSize `shouldSatisfy` (> 0)
+        pure storedSize
+      other -> expectationFailure ("expected legacy-shaped DLQ control, got " <> show other) >> pure 0
+
+    putStrLn $
+      "DLQ-PAYLOAD-SIZE-DIAG: dualWriteJsonb="
+        <> show applicationSize
+        <> "B legacyJsonb="
+        <> show legacySize
+        <> "B delta="
+        <> show (applicationSize - legacySize)
+        <> "B"
+
+    sourceMessages <-
+      runPgmqSession pool $
+        Sessions.readMessage $
+          ReadMessage
+            { queueName = queueName,
+              delay = 30,
+              batchSize = Just 1,
+              conditional = Nothing
+            }
+    Vector.length sourceMessages `shouldBe` 0
 
   it "preserves trace headers when moving to DLQ" $ \TestFixture {pool, queueName, dlqName} -> do
     -- Send a message with trace headers
@@ -855,6 +948,42 @@ deadLetterHandler :: (IOE :> es) => IORef Int -> Handler es Value
 deadLetterHandler processedRef _ = do
   liftIO $ atomicModifyIORef' processedRef (\n -> (n + 1, ()))
   pure $ AckDeadLetter (PoisonPill "Test dead-letter")
+
+applicationFailureHandler :: (IOE :> es) => IORef Int -> Handler es Value
+applicationFailureHandler processedRef _ = do
+  liftIO $ atomicModifyIORef' processedRef (\n -> (n + 1, ()))
+  pure $
+    AckDeadLetter $
+      ApplicationFailure
+        representativeDeadLetterCode
+        "selected 101 recipients; configured limit is 100"
+
+representativeDeadLetterCode :: DeadLetterCode
+representativeDeadLetterCode =
+  case mkDeadLetterCode "keiro.router.selection.recipient_overflow" of
+    Left err -> error (Text.unpack err)
+    Right code -> code
+
+inspectNextDlqPayload :: QueueName -> Session.Session (Maybe (Maybe Text.Text, Maybe Text.Text, Maybe Text.Text, Int32))
+inspectNextDlqPayload queueName = Session.statement queueName inspectDlqPayloadStatement
+
+inspectDlqPayloadStatement :: Statement.Statement QueueName (Maybe (Maybe Text.Text, Maybe Text.Text, Maybe Text.Text, Int32))
+inspectDlqPayloadStatement =
+  Statement.preparable sql Encoders.queueNameEncoder decoder
+  where
+    sql =
+      "SELECT message->>'dead_letter_reason', "
+        <> "message->>'dead_letter_reason_code', "
+        <> "message->>'dead_letter_reason_detail', "
+        <> "pg_column_size(message) "
+        <> "FROM pgmq.read($1, 30, 1, '{}'::jsonb)"
+    decoder =
+      D.rowMaybe $
+        (,,,)
+          <$> D.column (D.nullable D.text)
+          <*> D.column (D.nullable D.text)
+          <*> D.column (D.nullable D.text)
+          <*> D.column (D.nonNullable D.int4)
 
 -- | Handler that takes a specified delay before acking.
 slowHandler :: (IOE :> es) => IORef Int -> Int -> Handler es Value

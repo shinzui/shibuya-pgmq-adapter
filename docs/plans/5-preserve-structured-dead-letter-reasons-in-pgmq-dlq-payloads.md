@@ -63,8 +63,10 @@ idempotent acknowledgement, retries, and trace propagation do not change.
   public projections; added exact four-constructor, null/empty, Unicode/escaping, metadata-mode,
   generator/shrinker, and projection-derived property coverage; built the whole workspace; and ran
   the non-database suite with 160 examples, zero failures, and 20 expected database-pending cases.
-- [ ] M3 — Prove the application reason against a real PGMQ DLQ, update capability and user
-  documentation, and record focused payload performance/size evidence.
+- [x] (2026-08-10T21:17:02Z) M3 — proved the representative application reason through the real
+  adapter and PostgreSQL JSONB operators; measured JSONB size plus fully encoded serialization;
+  updated user, configuration, architecture, internal, and capability documentation; passed strict
+  capability validation; and ran 161 database-backed examples with zero failures.
 - [ ] M4 — Run all repository and bundle gates, publish/tag the adapter release, close IR-1 with
   evidence, and perform the required ADR-distillation review.
 
@@ -108,6 +110,22 @@ idempotent acknowledgement, retries, and trace propagation do not change.
   The production and property-test constructor matches emitted the expected incomplete-pattern
   warnings for `ApplicationFailure`, confirming the precise Milestone 2 work rather than exposing
   another compatibility failure.
+- The representative row measured 321 bytes with the dual-write JSONB body and 168 bytes for the
+  legacy-shaped control under the same ephemeral PostgreSQL, a 153-byte physical JSONB increase.
+  The compact encoded JSON values were 306 and 157 bytes respectively, retaining the predicted
+  149-byte difference. These measurements are diagnostics, not stable storage guarantees.
+- The pure benchmark completed all six cases with no database connection. Results were:
+
+  ```text
+  case                        bytes legacy/dual/delta    time legacy/dual       allocation legacy/dual
+  max-retries                 86 / 168 / 82              495 ns / 939 ns         6.2 KB / 8.0 KB
+  representative-application 157 / 306 / 149            594 ns / 1.17 us       6.4 KB / 8.5 KB
+  application-8k-detail       8301 / 16594 / 8293        11.4 us / 21.7 us      52 KB / 62 KB
+  ```
+
+  The 8 KiB case shows the expected linear copying rather than repeated code validation or
+  nonlinear work. The representative dual-write encoder is about 0.66% of the repository's
+  same-machine 177 us single-send benchmark, well below the five-percent investigation gate.
 
 
 ## Decision Log
@@ -556,3 +574,6 @@ field after its adoption gates pass.
   abbreviated unit IDs with an exact `jq` query.
 - 2026-08-10: Recorded Milestone 2's production projection integration and successful exact,
   property, compilation, and non-database validation evidence.
+- 2026-08-10: Recorded Milestone 3's real PostgreSQL JSONB proof, physical/encoded size evidence,
+  allocation/timing benchmark, complete database-backed regression run, and migration/operator
+  documentation updates.

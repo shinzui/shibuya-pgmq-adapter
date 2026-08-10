@@ -261,12 +261,19 @@ DLQ payload structure:
 {
   "original_message": { ... },
   "dead_letter_reason": "max_retries_exceeded",
+  "dead_letter_reason_code": "max_retries_exceeded",
+  "dead_letter_reason_detail": null,
   "original_message_id": 12345,
   "original_enqueued_at": "2024-01-15T10:30:00Z",
   "read_count": 4,
   "original_headers": { ... }
 }
 ```
+
+The three reason fields are unconditional; `includeMetadata` controls only the
+remaining original-message metadata. Application failures use their validated
+application code and verbatim detail. The rendered field is retained temporarily
+for compatibility with older readers.
 
 ### AckHalt
 

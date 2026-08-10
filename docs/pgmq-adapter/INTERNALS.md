@@ -242,12 +242,17 @@ messaging attributes yet).
 ```haskell
 mkDlqPayload :: Pgmq.Message -> DeadLetterReason -> Bool -> Pgmq.MessageBody
 mkDlqPayload msg reason includeMetadata =
-  Pgmq.MessageBody $
-    object $
-      [ "original_message" .= Pgmq.unMessageBody msg.body,
-        "dead_letter_reason" .= reasonToText reason
-      ]
-        ++ metadataFields
+  let rendered = renderDeadLetterReason reason
+      code = deadLetterCodeText (deadLetterReasonCode reason)
+      detail = deadLetterReasonDetail reason
+   in Pgmq.MessageBody $
+        object $
+          [ "original_message" .= Pgmq.unMessageBody msg.body,
+            "dead_letter_reason" .= rendered,
+            "dead_letter_reason_code" .= code,
+            "dead_letter_reason_detail" .= detail
+          ]
+            ++ metadataFields
   where
     metadataFields
       | includeMetadata =
@@ -258,15 +263,11 @@ mkDlqPayload msg reason includeMetadata =
             "original_headers" .= msg.headers
           ]
       | otherwise = []
-
-    reasonToText :: DeadLetterReason -> Text
-    reasonToText = \case
-      PoisonPill t -> "poison_pill: " <> t
-      InvalidPayload t -> "invalid_payload: " <> t
-      MaxRetriesExceeded -> "max_retries_exceeded"
 ```
 
-Constructs JSON object for DLQ. Metadata fields are conditionally included.
+Constructs the DLQ JSON through Shibuya's total public reason projections. All
+three reason fields are unconditional; only original-message metadata is
+conditional.
 
 ## Stream Implementation (Internal.hs)
 

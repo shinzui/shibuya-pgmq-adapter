@@ -234,6 +234,8 @@ The DLQ message body is a JSON object:
 {
   "original_message": { "order_id": 123, "item": "widget" },
   "dead_letter_reason": "max_retries_exceeded",
+  "dead_letter_reason_code": "max_retries_exceeded",
+  "dead_letter_reason_detail": null,
   "original_message_id": 456,
   "original_enqueued_at": "2024-01-15T10:30:00Z",
   "last_read_at": "2024-01-15T10:31:00Z",
@@ -246,17 +248,50 @@ The DLQ message body is a JSON object:
 ```json
 {
   "original_message": { "order_id": 123, "item": "widget" },
-  "dead_letter_reason": "max_retries_exceeded"
+  "dead_letter_reason": "max_retries_exceeded",
+  "dead_letter_reason_code": "max_retries_exceeded",
+  "dead_letter_reason_detail": null
+}
+```
+
+`includeMetadata` controls only the original-message metadata. It never removes
+`original_message` or any of the three reason fields. An application reason is
+encoded as:
+
+```json
+{
+  "original_message": { "order_id": 123, "item": "widget" },
+  "dead_letter_reason": "keiro.router.selection.recipient_overflow: selected 101 recipients; configured limit is 100",
+  "dead_letter_reason_code": "keiro.router.selection.recipient_overflow",
+  "dead_letter_reason_detail": "selected 101 recipients; configured limit is 100"
 }
 ```
 
 ### Dead Letter Reasons
 
-| Reason | Description |
-|--------|-------------|
-| `max_retries_exceeded` | Message exceeded `maxRetries` |
-| `poison_pill: <text>` | Handler returned `AckDeadLetter (PoisonPill text)` |
-| `invalid_payload: <text>` | Handler returned `AckDeadLetter (InvalidPayload text)` |
+| Decision | Code | Detail | `dead_letter_reason` compatibility value |
+|----------|------|--------|------------------------------------------|
+| `MaxRetriesExceeded` | `max_retries_exceeded` | `null` | `max_retries_exceeded` |
+| `PoisonPill text` | `poison_pill` | `text` | `poison_pill: <text>` |
+| `InvalidPayload text` | `invalid_payload` | `text` | `invalid_payload: <text>` |
+| `ApplicationFailure code detail` | validated application code | `detail` | `<code>: <detail>` |
+
+`dead_letter_reason_detail` is always present. `Nothing` is JSON `null`, while
+an explicitly empty detail remains `""`.
+
+Version 0.14 temporarily dual-writes all three values. New readers should query
+`message ->> 'dead_letter_reason_code'` and
+`message ->> 'dead_letter_reason_detail'`, with `dead_letter_reason` as a
+fallback for rows written by older adapters. The adapter does not install a
+JSONB index; operators may add an expression index such as
+`CREATE INDEX ... ON pgmq.q_orders_dlq ((message ->> 'dead_letter_reason_code'))`
+under their own queue and write-cost policy.
+
+Keep application detail bounded and free of secrets, full payloads, raw SQL, and
+unrestricted backend errors. Its CPU, memory, network, WAL, and storage cost is
+linear in its length. `TopicRoute` multiplies that cost by the number of matching
+queues. See the [Dead-Letter Queues guide](../user/pgmq-dead-letter-queues.md) for
+exact queries, fallback SQL, and rollout guidance.
 
 ## FifoConfig
 

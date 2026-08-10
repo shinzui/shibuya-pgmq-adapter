@@ -10,6 +10,7 @@ A message is dead-lettered when:
 - Handler returns `AckDeadLetter (InvalidPayload "...")`
 - Handler returns `AckDeadLetter (PoisonPill "...")`
 - Handler returns `AckDeadLetter MaxRetriesExceeded`
+- Handler returns `AckDeadLetter (ApplicationFailure code detail)`
 
 ## Without DLQ Configuration
 
@@ -80,6 +81,8 @@ Both queues receive the dead-lettered message.
 {
   "original_message": { "orderId": 123, "item": "widget" },
   "dead_letter_reason": "max_retries_exceeded",
+  "dead_letter_reason_code": "max_retries_exceeded",
+  "dead_letter_reason_detail": null,
   "original_message_id": 456,
   "original_enqueued_at": "2024-01-15T10:30:00Z",
   "last_read_at": "2024-01-15T10:35:00Z",
@@ -93,17 +96,101 @@ Both queues receive the dead-lettered message.
 ```json
 {
   "original_message": { "orderId": 123, "item": "widget" },
-  "dead_letter_reason": "max_retries_exceeded"
+  "dead_letter_reason": "max_retries_exceeded",
+  "dead_letter_reason_code": "max_retries_exceeded",
+  "dead_letter_reason_detail": null
+}
+```
+
+`includeMetadata` controls only the original-message id, timestamps, read count,
+and headers. `original_message` and all three reason fields are always present.
+
+An application-owned reason is preserved without parsing its human rendering:
+
+```json
+{
+  "original_message": { "orderId": 123, "item": "widget" },
+  "dead_letter_reason": "keiro.router.selection.recipient_overflow: selected 101 recipients; configured limit is 100",
+  "dead_letter_reason_code": "keiro.router.selection.recipient_overflow",
+  "dead_letter_reason_detail": "selected 101 recipients; configured limit is 100"
 }
 ```
 
 ### Dead-Letter Reasons
 
-| Reason | Description |
-|--------|-------------|
-| `max_retries_exceeded` | Message exceeded `maxRetries` |
-| `poison_pill: <text>` | Handler returned `AckDeadLetter (PoisonPill text)` |
-| `invalid_payload: <text>` | Handler returned `AckDeadLetter (InvalidPayload text)` |
+| Decision | `dead_letter_reason_code` | `dead_letter_reason_detail` | Compatibility rendering |
+|----------|---------------------------|-----------------------------|-------------------------|
+| `MaxRetriesExceeded` | `max_retries_exceeded` | `null` | `max_retries_exceeded` |
+| `PoisonPill text` | `poison_pill` | `text` | `poison_pill: <text>` |
+| `InvalidPayload text` | `invalid_payload` | `text` | `invalid_payload: <text>` |
+| `ApplicationFailure code detail` | validated application code | `detail` | `<code>: <detail>` |
+
+The detail key is always present. No detail is JSON `null`; an explicitly empty
+detail is the distinct JSON string `""`.
+
+### Querying and indexing
+
+PGMQ stores the body in the queue table's JSONB `message` column. Operators can
+query a validated queue table directly:
+
+```sql
+SELECT
+  msg_id,
+  message ->> 'dead_letter_reason_code' AS reason_code,
+  message ->> 'dead_letter_reason_detail' AS reason_detail
+FROM pgmq.q_orders_dlq
+WHERE message ->> 'dead_letter_reason_code'
+      = 'keiro.router.selection.recipient_overflow';
+```
+
+The adapter does not install an index. For a large retained DLQ, an operator can
+add an expression index under their own schema, retention, and write-cost policy:
+
+```sql
+CREATE INDEX orders_dlq_reason_code_idx
+  ON pgmq.q_orders_dlq ((message ->> 'dead_letter_reason_code'));
+```
+
+Substitute only a validated queue table name; PostgreSQL parameters cannot stand
+in for identifiers.
+
+### Migration from the legacy field
+
+Version 0.14 dual-writes the canonical `dead_letter_reason` string and the two
+structured fields. Existing readers can keep using the string while new readers
+should prefer `dead_letter_reason_code` and `dead_letter_reason_detail`. During
+retention overlap, old rows have only the legacy field, so use a fallback such as:
+
+```sql
+SELECT
+  COALESCE(
+    message ->> 'dead_letter_reason_code',
+    split_part(message ->> 'dead_letter_reason', ':', 1)
+  ) AS reason_code,
+  CASE
+    WHEN message ? 'dead_letter_reason_detail'
+      THEN message ->> 'dead_letter_reason_detail'
+    WHEN position(': ' IN (message ->> 'dead_letter_reason')) > 0
+      THEN substring(
+        (message ->> 'dead_letter_reason')
+        FROM position(': ' IN (message ->> 'dead_letter_reason')) + 2
+      )
+    ELSE NULL
+  END AS reason_detail
+FROM pgmq.q_orders_dlq;
+```
+
+The legacy field is temporary but is not removed by this release. Rollback to
+0.13 stops producing structured fields and does not rewrite existing rows, so
+keep the fallback until all writers and retained rows are known to be migrated.
+
+### Detail size and safety
+
+Application detail is carried verbatim. Keep it bounded and suitable for
+operators: do not put secrets, complete payloads, raw SQL, or unrestricted
+backend error text in it. Larger detail increases JSON encoding, memory, network,
+WAL, and retained storage linearly. Topic routing writes the payload once to
+each matching target queue, multiplying those costs by the fan-out count.
 
 ## Header Preservation
 
