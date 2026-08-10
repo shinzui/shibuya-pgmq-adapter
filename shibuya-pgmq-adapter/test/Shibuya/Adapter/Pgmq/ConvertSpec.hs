@@ -7,7 +7,7 @@ import Data.Text qualified as Text
 import Data.Time (UTCTime (..), fromGregorian)
 import Pgmq.Types qualified as Pgmq
 import Shibuya.Adapter.Pgmq.Convert
-import Shibuya.Core.Ack (DeadLetterReason (..))
+import Shibuya.Core.Ack (DeadLetterCode, DeadLetterReason (..), mkDeadLetterCode)
 import Shibuya.Core.Types (Attempt (..), Cursor (..), Envelope (..), MessageId (..))
 import Test.Hspec
 import Test.QuickCheck
@@ -339,6 +339,15 @@ mkDlqPayloadSpec = describe "mkDlqPayload" $ do
         Object obj -> KeyMap.member "dead_letter_reason" obj `shouldBe` True
         _ -> expectationFailure "Expected Object"
 
+    it "always includes structured reason fields" $ do
+      let Pgmq.MessageBody payload = mkDlqPayload sampleMessage MaxRetriesExceeded False
+      case payload of
+        Object obj -> do
+          KeyMap.lookup "dead_letter_reason_code" obj
+            `shouldBe` Just (String "max_retries_exceeded")
+          KeyMap.lookup "dead_letter_reason_detail" obj `shouldBe` Just Null
+        _ -> expectationFailure "Expected Object"
+
     it "does not include original_message_id" $ do
       let Pgmq.MessageBody payload = mkDlqPayload sampleMessage MaxRetriesExceeded False
       case payload of
@@ -384,27 +393,65 @@ mkDlqPayloadSpec = describe "mkDlqPayload" $ do
         Object obj -> KeyMap.member "last_read_at" obj `shouldBe` True
         _ -> expectationFailure "Expected Object"
 
-  describe "reason formatting" $ do
-    it "formats MaxRetriesExceeded" $ do
-      let Pgmq.MessageBody payload = mkDlqPayload sampleMessage MaxRetriesExceeded False
+    it "retains all reason fields unchanged" $ do
+      let Pgmq.MessageBody payload = mkDlqPayload sampleMessage MaxRetriesExceeded True
       case payload of
-        Object obj ->
+        Object obj -> do
           KeyMap.lookup "dead_letter_reason" obj
             `shouldBe` Just (String "max_retries_exceeded")
+          KeyMap.lookup "dead_letter_reason_code" obj
+            `shouldBe` Just (String "max_retries_exceeded")
+          KeyMap.lookup "dead_letter_reason_detail" obj `shouldBe` Just Null
         _ -> expectationFailure "Expected Object"
 
-    it "formats PoisonPill with message" $ do
-      let Pgmq.MessageBody payload = mkDlqPayload sampleMessage (PoisonPill "corrupt data") False
-      case payload of
-        Object obj ->
-          KeyMap.lookup "dead_letter_reason" obj
-            `shouldBe` Just (String "poison_pill: corrupt data")
-        _ -> expectationFailure "Expected Object"
+  describe "reason fields" $ do
+    let expectedPayload rendered code detail =
+          object
+            [ "original_message" .= object ["data" .= ("test" :: Text.Text)],
+              "dead_letter_reason" .= (rendered :: Text.Text),
+              "dead_letter_reason_code" .= (code :: Text.Text),
+              "dead_letter_reason_detail" .= (detail :: Maybe Text.Text)
+            ]
+        payloadFor reason =
+          let Pgmq.MessageBody payload = mkDlqPayload sampleMessage reason False
+           in payload
 
-    it "formats InvalidPayload with message" $ do
-      let Pgmq.MessageBody payload = mkDlqPayload sampleMessage (InvalidPayload "parse error") False
-      case payload of
-        Object obj ->
-          KeyMap.lookup "dead_letter_reason" obj
-            `shouldBe` Just (String "invalid_payload: parse error")
-        _ -> expectationFailure "Expected Object"
+    it "writes the exact PoisonPill object" $ do
+      payloadFor (PoisonPill "corrupt data")
+        `shouldBe` expectedPayload "poison_pill: corrupt data" "poison_pill" (Just "corrupt data")
+
+    it "writes the exact InvalidPayload object" $ do
+      payloadFor (InvalidPayload "parse error")
+        `shouldBe` expectedPayload "invalid_payload: parse error" "invalid_payload" (Just "parse error")
+
+    it "writes the exact MaxRetriesExceeded object with null detail" $ do
+      payloadFor MaxRetriesExceeded
+        `shouldBe` expectedPayload "max_retries_exceeded" "max_retries_exceeded" Nothing
+
+    it "writes the exact ApplicationFailure object" $ do
+      payloadFor (ApplicationFailure representativeDeadLetterCode "selected 101 recipients; configured limit is 100")
+        `shouldBe` expectedPayload
+          "keiro.router.selection.recipient_overflow: selected 101 recipients; configured limit is 100"
+          "keiro.router.selection.recipient_overflow"
+          (Just "selected 101 recipients; configured limit is 100")
+
+    it "preserves empty application detail as an empty string" $ do
+      payloadFor (ApplicationFailure representativeDeadLetterCode "")
+        `shouldBe` expectedPayload
+          "keiro.router.selection.recipient_overflow: "
+          "keiro.router.selection.recipient_overflow"
+          (Just "")
+
+    it "preserves Unicode, quotes, backslashes, and colons in structured detail" $ do
+      let detail = "選択失敗: recipient=\"north\" \\ retry" :: Text.Text
+      payloadFor (ApplicationFailure representativeDeadLetterCode detail)
+        `shouldBe` expectedPayload
+          ("keiro.router.selection.recipient_overflow: " <> detail)
+          "keiro.router.selection.recipient_overflow"
+          (Just detail)
+
+representativeDeadLetterCode :: DeadLetterCode
+representativeDeadLetterCode =
+  case mkDeadLetterCode "keiro.router.selection.recipient_overflow" of
+    Left err -> error (Text.unpack err)
+    Right code -> code

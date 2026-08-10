@@ -1,8 +1,8 @@
-{-# OPTIONS_GHC -Wno-orphans #-}
+{-# OPTIONS_GHC -Wno-orphans -Werror=incomplete-patterns #-}
 
 module Shibuya.Adapter.Pgmq.PropertySpec (spec) where
 
-import Data.Aeson (Value (..))
+import Data.Aeson (Value (..), toJSON)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Int (Int64)
 import Data.Maybe (isJust)
@@ -17,7 +17,15 @@ import Shibuya.Adapter.Pgmq.Convert
     pgmqMessageIdToCursor,
     pgmqMessageToEnvelope,
   )
-import Shibuya.Core.Ack (DeadLetterReason (..))
+import Shibuya.Core.Ack
+  ( DeadLetterCode,
+    DeadLetterReason (..),
+    deadLetterCodeText,
+    deadLetterReasonCode,
+    deadLetterReasonDetail,
+    mkDeadLetterCode,
+    renderDeadLetterReason,
+  )
 import Shibuya.Core.Types (Cursor (..), Envelope (..))
 import Test.Hspec
 import Test.QuickCheck
@@ -87,6 +95,21 @@ dlqPayloadProperties = describe "DLQ payload properties" $ do
           Object obj -> KeyMap.member "dead_letter_reason" obj === True
           _ -> property False
 
+  it "writes all reason fields from Shibuya's total public projections" $ property $ \(reason :: DeadLetterReason) (includeMeta :: Bool) ->
+    let msg = mkTestMessage 1
+        Pgmq.MessageBody payload = mkDlqPayload msg reason includeMeta
+     in case payload of
+          Object obj ->
+            conjoin
+              [ KeyMap.lookup "dead_letter_reason" obj
+                  === Just (String (renderDeadLetterReason reason)),
+                KeyMap.lookup "dead_letter_reason_code" obj
+                  === Just (String (deadLetterCodeText (deadLetterReasonCode reason))),
+                KeyMap.lookup "dead_letter_reason_detail" obj
+                  === Just (toJSON (deadLetterReasonDetail reason))
+              ]
+          _ -> property False
+
   it "metadata keys present iff includeMeta is True" $ property $ \(includeMeta :: Bool) ->
     let msg = mkTestMessage 1
         Pgmq.MessageBody payload = mkDlqPayload msg MaxRetriesExceeded includeMeta
@@ -116,7 +139,8 @@ instance Arbitrary DeadLetterReason where
     oneof
       [ pure MaxRetriesExceeded,
         PoisonPill <$> arbitraryText,
-        InvalidPayload <$> arbitraryText
+        InvalidPayload <$> arbitraryText,
+        ApplicationFailure propertyDeadLetterCode <$> arbitraryText
       ]
     where
       arbitraryText :: Gen Text
@@ -125,3 +149,11 @@ instance Arbitrary DeadLetterReason where
   shrink MaxRetriesExceeded = []
   shrink (PoisonPill t) = MaxRetriesExceeded : [PoisonPill (Text.pack t') | t' <- shrink (Text.unpack t)]
   shrink (InvalidPayload t) = MaxRetriesExceeded : [InvalidPayload (Text.pack t') | t' <- shrink (Text.unpack t)]
+  shrink (ApplicationFailure _ t) =
+    MaxRetriesExceeded : [ApplicationFailure propertyDeadLetterCode (Text.pack t') | t' <- shrink (Text.unpack t)]
+
+propertyDeadLetterCode :: DeadLetterCode
+propertyDeadLetterCode =
+  case mkDeadLetterCode "test.property.application_failure" of
+    Left err -> error (Text.unpack err)
+    Right code -> code

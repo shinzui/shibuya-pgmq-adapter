@@ -59,8 +59,10 @@ idempotent acknowledgement, retries, and trace propagation do not change.
   this plan for its typed `targetPlan`, updated all Shibuya bounds and adapter version/changelogs,
   passed Mori/OKF validation, and built the whole workspace with Cabal resolving
   `shibuya-core-0.9.0.0` and `shibuya-metrics-0.9.0.0` from Hackage.
-- [ ] M2 — Replace the production constructor match with Shibuya's total public projections and
-  add exact unit/property coverage for legacy and structured fields.
+- [x] (2026-08-10T21:06:30Z) M2 — replaced the production constructor match with Shibuya's total
+  public projections; added exact four-constructor, null/empty, Unicode/escaping, metadata-mode,
+  generator/shrinker, and projection-derived property coverage; built the whole workspace; and ran
+  the non-database suite with 160 examples, zero failures, and 20 expected database-pending cases.
 - [ ] M3 — Prove the application reason against a real PGMQ DLQ, update capability and user
   documentation, and record focused payload performance/size evidence.
 - [ ] M4 — Run all repository and bundle gates, publish/tag the adapter release, close IR-1 with
@@ -552,3 +554,5 @@ field after its adoption gates pass.
   filesystem path to Mori's required typed plan URI, documented the minimal agent-plans
   registration needed for validation, and replaced a Cabal-plan grep that does not work with
   abbreviated unit IDs with an exact `jq` query.
+- 2026-08-10: Recorded Milestone 2's production projection integration and successful exact,
+  property, compilation, and non-database validation evidence.

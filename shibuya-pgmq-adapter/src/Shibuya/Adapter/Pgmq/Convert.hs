@@ -25,7 +25,13 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TE
 import Pgmq.Types qualified as Pgmq
-import Shibuya.Core.Ack (DeadLetterReason (..))
+import Shibuya.Core.Ack
+  ( DeadLetterReason,
+    deadLetterCodeText,
+    deadLetterReasonCode,
+    deadLetterReasonDetail,
+    renderDeadLetterReason,
+  )
 import Shibuya.Core.Types (Attempt (..), Cursor (..), Envelope (..), MessageId (..), TraceHeaders)
 
 -- | Convert a pgmq MessageId to a Shibuya MessageId.
@@ -142,12 +148,17 @@ mkDlqPayload ::
   -- | DLQ message body
   Pgmq.MessageBody
 mkDlqPayload msg reason includeMetadata =
-  Pgmq.MessageBody $
-    object $
-      [ "original_message" .= Pgmq.unMessageBody msg.body,
-        "dead_letter_reason" .= reasonToText reason
-      ]
-        ++ metadataFields
+  let rendered = renderDeadLetterReason reason
+      code = deadLetterCodeText (deadLetterReasonCode reason)
+      detail = deadLetterReasonDetail reason
+   in Pgmq.MessageBody $
+        object $
+          [ "original_message" .= Pgmq.unMessageBody msg.body,
+            "dead_letter_reason" .= rendered,
+            "dead_letter_reason_code" .= code,
+            "dead_letter_reason_detail" .= detail
+          ]
+            ++ metadataFields
   where
     metadataFields
       | includeMetadata =
@@ -158,9 +169,3 @@ mkDlqPayload msg reason includeMetadata =
             "original_headers" .= msg.headers
           ]
       | otherwise = []
-
-    reasonToText :: DeadLetterReason -> Text
-    reasonToText = \case
-      PoisonPill t -> "poison_pill: " <> t
-      InvalidPayload t -> "invalid_payload: " <> t
-      MaxRetriesExceeded -> "max_retries_exceeded"
