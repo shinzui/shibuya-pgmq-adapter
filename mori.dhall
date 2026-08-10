@@ -132,6 +132,14 @@ in  Schema.Project::{ project =
         , description = Some
             "What shibuya-pgmq-adapter provides today, one concept per capability, with evidence"
         }
+      , Schema.OkfBundle::{
+        , name = "improvement-requests"
+        , path = "docs/improvement-requests"
+        , profile = Some "docs/improvement-requests/profile.dhall"
+        , okfVersion = "0.2"
+        , description = Some
+            "Proposed improvements to the PGMQ adapter, with stable IR-N handles"
+        }
       ]
     , docs =
       [ Schema.DocRef::{ key = "readme"

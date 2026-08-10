@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.14.0.0 — Unreleased
+
+This release adopts the application-defined dead-letter reason API from `shibuya-core` 0.9.
+The adapter's Haskell API is unchanged, while its PGMQ dead-letter payload gains structured,
+machine-queryable reason fields.
+
+### Breaking Changes
+
+- Requires `shibuya-core ^>=0.9.0.0`, up from `^>=0.8.0.1`. The dependency release extends
+  `DeadLetterReason` with `ApplicationFailure` and adds total public reason projections.
+- The example also requires `shibuya-metrics ^>=0.9.0.0` so the Shibuya package family remains
+  aligned.
+
+### Dead-Letter Queues
+
+- Every new DLQ payload retains the compatibility field `dead_letter_reason` and adds
+  `dead_letter_reason_code` plus an always-present `dead_letter_reason_detail`. Reasons without
+  detail encode that last field as JSON `null`.
+- Application-owned dead-letter codes and details are transported verbatim through the public
+  Shibuya projections; the adapter no longer duplicates Shibuya's constructor renderer.
+
 ## 0.13.0.0 — 2026-08-09
 
 Driven by the `pgmq-hs` 0.5 release. The adapter's own public function and record signatures are unchanged.

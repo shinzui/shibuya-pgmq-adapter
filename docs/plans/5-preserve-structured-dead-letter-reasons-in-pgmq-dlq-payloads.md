@@ -51,8 +51,14 @@ idempotent acknowledgement, retries, and trace propagation do not change.
 
 ## Progress
 
-- [ ] M1 — Re-verify the released dependency, repair and sharpen IR-1, update every workspace
-  Shibuya bound, and prepare adapter version 0.14.0.0.
+- [x] (2026-08-10T20:57:14Z) M1 release verification — Mori located the registered Shibuya source;
+  Hackage reported 0.9.0.0 as the newest normal core/metrics version; upstream `v0.9.0.0` resolved
+  to annotated tag object `9d3e85b6` and commit `d958a574`; and the tagged public API matched this
+  plan.
+- [x] (2026-08-10T21:02:35Z) M1 contract preparation — repaired and sharpened IR-1, registered
+  this plan for its typed `targetPlan`, updated all Shibuya bounds and adapter version/changelogs,
+  passed Mori/OKF validation, and built the whole workspace with Cabal resolving
+  `shibuya-core-0.9.0.0` and `shibuya-metrics-0.9.0.0` from Hackage.
 - [ ] M2 — Replace the production constructor match with Shibuya's total public projections and
   add exact unit/property coverage for legacy and structured fields.
 - [ ] M3 — Prove the application reason against a real PGMQ DLQ, update capability and user
@@ -86,6 +92,20 @@ idempotent acknowledgement, retries, and trace propagation do not change.
   local ADR to cite at authoring time. The dual-write/removal boundary is a durable decision; the
   implementer must repeat the ADR discovery and create an ADR only if the repository has adopted
   an ADR convention by then or if one is deliberately introduced as part of implementation.
+- Mori rejects a repository-relative `targetPlan` frontmatter value even when it names a plan in
+  the same repository. Its improvement-request contract requires a canonical plan artifact URI
+  and exact registry membership. The initial literal value failed with:
+
+  ```text
+  IR-1: targetPlan has a disallowed artifact kind:
+  docs/plans/5-preserve-structured-dead-letter-reasons-in-pgmq-dlq-payloads.md
+  ```
+- The local Cabal package index initially ended at Shibuya 0.8 even though Hackage already listed
+  0.9.0.0. `cabal update` advanced the index state from `2026-08-10T19:45:30Z` to
+  `2026-08-10T20:30:45Z`; the same unchanged bounds then resolved and built both 0.9 packages.
+  The production and property-test constructor matches emitted the expected incomplete-pattern
+  warnings for `ApplicationFailure`, confirming the precise Milestone 2 work rather than exposing
+  another compatibility failure.
 
 
 ## Decision Log
@@ -133,6 +153,14 @@ idempotent acknowledgement, retries, and trace propagation do not change.
   Rationale: Removal can recover most of the temporary payload growth only after consumers have
   migrated. Plan 6 holds that breaking work behind explicit adoption gates and a separate Mina
   intention.
+  Date: 2026-08-10.
+
+- Decision: IR-1's `targetPlan` is the canonical same-project URI
+  `mori://shinzui/shibuya-pgmq-adapter/plans/5-preserve-structured-dead-letter-reasons-in-pgmq-dlq-payloads`,
+  and the implementation refreshes the local Mori registration before semantic validation.
+  Rationale: Mori treats `targetPlan` as a typed artifact reference, not a filesystem link, and
+  validates exact plan registration. The plan body continues to use repository-relative Markdown
+  links where ordinary local navigation is intended.
   Date: 2026-08-10.
 
 
@@ -223,7 +251,9 @@ into a later breaking family without revising this plan.
 
 Repair IR-1's frontmatter `origin` to
 `mori://shinzui/shibuya/packages/shibuya-core`, retain the exact upstream IR URI in the prose, and
-add `targetPlan: docs/plans/5-preserve-structured-dead-letter-reasons-in-pgmq-dlq-payloads.md`.
+add the typed plan reference
+`targetPlan: mori://shinzui/shibuya-pgmq-adapter/plans/5-preserve-structured-dead-letter-reasons-in-pgmq-dlq-payloads`.
+Refresh the local Mori registration before semantic validation so the exact plan is indexed.
 Tighten its Requested Change and Acceptance sections to name the three exact JSON fields, the
 always-present/null detail rule, the 0.9.0.0 bound, the temporary dual-write policy, and the
 deferred breaking plan. Do not mark the request complete before the release evidence exists.
@@ -336,11 +366,13 @@ rg -n 'shibuya-(core|metrics)' --glob '*.cabal'
 cabal build all --enable-tests --enable-benchmarks
 ```
 
-After Milestone 2, Cabal succeeds and its resolved plan contains 0.9 rather than 0.8. A concise
-check is:
+After Milestone 2, Cabal succeeds and its resolved plan contains 0.9 rather than 0.8. Cabal 3.16
+abbreviates package names in unit IDs, so query its explicit package fields:
 
 ```bash
-rg -o 'shibuya-(core|metrics)-[0-9.]+' dist-newstyle/cache/plan.json | sort -u
+jq -r '."install-plan"[]
+  | select(."pkg-name" == "shibuya-core" or ."pkg-name" == "shibuya-metrics")
+  | (."pkg-name" + "-" + ."pkg-version")' dist-newstyle/cache/plan.json | sort -u
 ```
 
 Expected output includes:
@@ -512,3 +544,11 @@ The wire contract after this plan is versioned by the adapter release rather tha
 field. Readers should prefer `dead_letter_reason_code` and `dead_letter_reason_detail`, and fall back
 to `dead_letter_reason` only for old rows. Plan 6 is the sole plan authorized to remove the fallback
 field after its adoption gates pass.
+
+
+## Revision Notes
+
+- 2026-08-10: Recorded Milestone 1 implementation evidence, corrected IR-1's `targetPlan` from a
+  filesystem path to Mori's required typed plan URI, documented the minimal agent-plans
+  registration needed for validation, and replaced a Cabal-plan grep that does not work with
+  abbreviated unit IDs with an exact `jq` query.
