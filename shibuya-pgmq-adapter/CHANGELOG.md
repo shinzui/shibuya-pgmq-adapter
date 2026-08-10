@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.14.0.0 — Unreleased
+## 0.14.0.0 — 2026-08-10
 
 This release adopts the application-defined dead-letter reason API from `shibuya-core` 0.9.
 The adapter's Haskell API is unchanged, while its PGMQ dead-letter payload gains structured,

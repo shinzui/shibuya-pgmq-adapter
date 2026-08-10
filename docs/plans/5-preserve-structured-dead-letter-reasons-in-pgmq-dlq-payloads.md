@@ -67,6 +67,10 @@ idempotent acknowledgement, retries, and trace propagation do not change.
   adapter and PostgreSQL JSONB operators; measured JSONB size plus fully encoded serialization;
   updated user, configuration, architecture, internal, and capability documentation; passed strict
   capability validation; and ran 161 database-backed examples with zero failures.
+- [x] (2026-08-10T21:24:42Z) M4 pre-publication gates — dated both 0.14.0.0 changelogs; passed
+  formatting, Cabal package checking, both strict OKF bundle checks, Mori validation, the complete
+  workspace build, 161 database-backed examples, and `nix flake check`; then built and inspected
+  the source and Hackage Haddock archives.
 - [ ] M4 — Run all repository and bundle gates, publish/tag the adapter release, close IR-1 with
   evidence, and perform the required ADR-distillation review.
 
@@ -126,6 +130,11 @@ idempotent acknowledgement, retries, and trace propagation do not change.
   The 8 KiB case shows the expected linear copying rather than repeated code validation or
   nonlinear work. The representative dual-write encoder is about 0.66% of the repository's
   same-machine 177 us single-send benchmark, well below the five-percent investigation gate.
+- `cabal check` reported no package warnings. The inspected 0.14.0.0 source archive contains the
+  dated package changelog, exact 0.14 version, `shibuya-core ^>=0.9.0.0` bounds in both library and
+  test stanzas, and the changed production/test sources. Hackage-mode Haddock generation completed
+  with 100% coverage for `Config` and `Convert` and 85% for the umbrella module; its warnings are
+  pre-existing unresolved or ambiguous cross-package links, not missing pages or build failures.
 
 
 ## Decision Log
@@ -577,3 +586,5 @@ field after its adoption gates pass.
 - 2026-08-10: Recorded Milestone 3's real PostgreSQL JSONB proof, physical/encoded size evidence,
   allocation/timing benchmark, complete database-backed regression run, and migration/operator
   documentation updates.
+- 2026-08-10: Recorded the dated 0.14.0.0 release notes, final repository gates, repeated complete
+  database suite, and inspected Hackage source/documentation archives ahead of publication.
