@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Adopt the 0.6 candidate from mori://shinzui/pgmq-hs in adapter, examples,
+  tests, and benchmarks. The adapter API and lease handling remain compatible.
+
 ## 0.14.0.0 — 2026-08-10
 
 This release adopts the application-defined dead-letter reason API from `shibuya-core` 0.9.
