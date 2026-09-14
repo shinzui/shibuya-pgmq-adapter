@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.15.0.0 — 2026-09-14
+
+Driven by the `pgmq-hs` 0.6 release. The adapter remains paired with `shibuya-core 0.9.0.0`,
+and its own public function and record signatures are unchanged.
+
+### Breaking Changes
+
+- Requires `pgmq-core ^>=0.6`, `pgmq-effectful ^>=0.6`, and `pgmq-hasql ^>=0.6` in the library,
+  plus `pgmq-migration ^>=0.6` in the test stanza, up from the 0.5 family. pgmq's own
+  `QueueMetrics` record gains a nullable `defaultPartitionLength` field, so applications that
+  construct that record directly must supply it.
+
+### Other Changes
+
+- Schema installation through `pgmq-migration` 0.6 now reaches PGMQ 1.13.0 (grouped-head reads,
+  partition premake, and default-partition metrics) via append-only migrations. Upgrading
+  preserves existing queue data.
+
 ## 0.14.0.0 — 2026-08-10
 
 This release adopts the application-defined dead-letter reason API from `shibuya-core` 0.9.
