@@ -60,8 +60,9 @@ without a local source override.
   changelogs, and the 0.16.0.0 package metadata. Formatting, all 169 tests, all-component builds,
   `cabal check`, the source distribution, strict capability validation, and `nix flake check`
   pass.
-- [ ] M4 remaining: Publish the validated 0.16.0.0 source and Haddocks to Hackage, push its
-  immutable tag, and create the GitHub release.
+- [x] 2026-09-16: Published 0.16.0.0 source and Haddocks to Hackage, pushed annotated tag
+  `v0.16.0.0` (peeling to release commit `7472c776`), and created a non-draft, non-prerelease
+  GitHub release. Hackage reports 0.16.0.0 as normal.
 
 
 ## Surprises & Discoveries
@@ -149,8 +150,9 @@ grouped-head effects without changing retry, prefetch, finalization, or telemetr
 PostgreSQL coverage proves absolute-head blocking and independent groups, and its mutation check
 fails on the unsafe legacy dispatch. The complete three-fixture performance matrix passes.
 Multi-group batches reduce statements by 10x at quantity ten and 50x at quantity fifty, including
-the 100,000-message fixture. Documentation and repository validation are complete; publication of
-0.16.0.0 remains.
+the 100,000-message fixture. Version 0.16.0.0 is published on Hackage with Haddocks and under the
+annotated `v0.16.0.0` tag plus a non-draft GitHub release. All milestones are complete; downstream
+Keiro can now validate against the registry release without a local path.
 
 
 ## Context and Orientation
