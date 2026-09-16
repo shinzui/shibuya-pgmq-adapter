@@ -43,7 +43,9 @@ without a local source override.
 - [x] 2026-09-16: Added `HeadPerGroup` dispatch for standard and long polling. The focused
   tests cover all six strategy/polling combinations; the complete adapter suite passed with
   167 examples and 0 failures under the repository's Nix development shell.
-- [ ] M2: Add database integration coverage for absolute-head blocking and per-group advance.
+- [x] 2026-09-16: Added adapter-path database integration coverage for one-head-per-group,
+  invisible-head blocking, settled-head advance, and delayed-head independence. The two focused
+  examples pass against ephemeral PostgreSQL.
 - [ ] M3: Add realistic safe-drain benchmark cases and capture same-machine performance evidence.
 - [ ] M4: Update public documentation and capability evidence, validate the repository, and
   release the PVP-breaking adapter version to Hackage and GitHub.
@@ -60,6 +62,10 @@ without a local source override.
 - The ambient compiler provides `base-4.20`, while this package requires `base-4.21`; direct
   `cabal test` cannot solve the package. `nix develop -c cabal test --enable-tests ...` selects
   GHC 9.12.4 and is the reproducible validation command.
+- Mutation evidence confirms the integration test exercises adapter dispatch: routing
+  `HeadPerGroup` through `readGrouped` changed the first batch from expected IDs `[1,3]` to
+  `[1,2,3,4]` and failed the one-head-per-group assertion. Restoring `readGroupedHead` makes
+  both focused examples pass.
 
 
 ## Decision Log
@@ -84,9 +90,10 @@ without a local source override.
 
 ## Outcomes & Retrospective
 
-M1 is complete. `HeadPerGroup` is public and dispatches through the released pgmq-hs grouped-head
-effects without changing retry, prefetch, finalization, or telemetry logic. Database semantics,
-performance evidence, documentation, and release remain.
+M1 and M2 are complete. `HeadPerGroup` is public and dispatches through the released pgmq-hs
+grouped-head effects without changing retry, prefetch, finalization, or telemetry logic. Real
+PostgreSQL coverage proves absolute-head blocking and independent groups, and its mutation check
+fails on the unsafe legacy dispatch. Performance evidence, documentation, and release remain.
 
 
 ## Context and Orientation

@@ -14,25 +14,39 @@ import Control.Monad (forM_)
 import Data.Aeson (Value (..), object, (.=))
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Int (Int32)
+import Data.List (sort)
+import Data.Text (Text)
+import Data.Time (addUTCTime, getCurrentTime)
 import Data.Vector qualified as Vector
 import Effectful (Eff, IOE, liftIO, runEff)
 import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Hasql.Pool qualified as Pool
+import Hasql.Session qualified as Hasql
 import Pgmq.Effectful (Pgmq, PgmqRuntimeError, runPgmq)
 import Pgmq.Effectful qualified as PgmqEff
 import Pgmq.Hasql.Sessions qualified as Sessions
-import Pgmq.Hasql.Statements.Types (MessageQuery (..), ReadMessage (..), SendMessage (..), VisibilityTimeoutQuery (..))
-import Pgmq.Types (MessageBody (..), QueueName)
+import Pgmq.Hasql.Statements.Types
+  ( MessageQuery (..),
+    ReadMessage (..),
+    SendMessage (..),
+    SendMessageWithHeaders (..),
+    SendMessageWithHeadersForLater (..),
+    VisibilityTimeoutQuery (..),
+  )
+import Pgmq.Types (Message (..), MessageBody (..), MessageHeaders (..), MessageId, QueueName)
 import Shibuya.Adapter.Pgmq.Config
-  ( PgmqAdapterConfig (..),
+  ( FifoConfig (..),
+    FifoReadStrategy (..),
+    PgmqAdapterConfig (..),
     PollingConfig (..),
     defaultConfig,
     defaultPollRetryConfig,
   )
 import Shibuya.Adapter.Pgmq.Convert (pgmqMessageToEnvelope)
-import Shibuya.Adapter.Pgmq.Internal (mkLease)
+import Shibuya.Adapter.Pgmq.Internal (mkLease, pgmqChunks)
 import Shibuya.Core.Lease (Lease (..))
 import Shibuya.Core.Types (Envelope (..))
+import Streamly.Data.Stream qualified as Stream
 import System.Environment (lookupEnv)
 import Test.Hspec
 import TmpPostgres (TestFixture (..), runPgmqSession, withPgmqDb, withTestFixture)
@@ -51,6 +65,7 @@ spec = do
       basicMessageProcessingSpec
       visibilityTimeoutSpec
       retryHandlingSpec
+      groupedHeadSpec
 
 -- | Wrapper to run tests with a temporary database and fixture
 withTempDbFixture :: (TestFixture -> IO ()) -> IO ()
@@ -343,6 +358,81 @@ retryHandlingSpec = describe "Retry handling" $ do
             }
       pure $ Vector.length msgs
     count2 `shouldBe` 1
+
+groupedHeadSpec :: SpecWith TestFixture
+groupedHeadSpec = describe "Grouped-head FIFO reads" $ do
+  it "leases at most one absolute head per group and advances only a settled group" $ \TestFixture {pool, queueName, dlqName = _} -> do
+    runPgmqSession pool $ Sessions.createFifoIndex queueName
+    (a1, a2, b1) <-
+      runPgmqSession pool $ do
+        a1 <- sendGrouped queueName "a" "a1"
+        a2 <- sendGrouped queueName "a" "a2"
+        b1 <- sendGrouped queueName "b" "b1"
+        _ <- sendGrouped queueName "b" "b2"
+        pure (a1, a2, b1)
+
+    heads <- readGroupedHeadBatch pool queueName
+    sortedMessageIds heads `shouldBe` sort [a1, b1]
+
+    blocked <- readGroupedHeadBatch pool queueName
+    blocked `shouldBe` Vector.empty
+
+    deleted <- runAdapterIO pool (PgmqEff.deleteMessage (MessageQuery queueName a1))
+    deleted `shouldBe` True
+    advanced <- readGroupedHeadBatch pool queueName
+    sortedMessageIds advanced `shouldBe` [a2]
+
+  it "lets another group advance while a delayed absolute head blocks its successor" $ \TestFixture {pool, queueName, dlqName = _} -> do
+    runPgmqSession pool $ Sessions.createFifoIndex queueName
+    scheduledAt <- addUTCTime 60 <$> getCurrentTime
+    _a1 <-
+      runPgmqSession pool $
+        Sessions.sendMessageWithHeadersForLater
+          SendMessageWithHeadersForLater
+            { queueName,
+              messageBody = MessageBody (String "a1"),
+              messageHeaders = groupHeaders "a",
+              scheduledAt
+            }
+    _a2 <- runPgmqSession pool (sendGrouped queueName "a" "a2")
+    b1 <- runPgmqSession pool (sendGrouped queueName "b" "b1")
+
+    heads <- readGroupedHeadBatch pool queueName
+    sortedMessageIds heads `shouldBe` [b1]
+
+readGroupedHeadBatch :: Pool.Pool -> QueueName -> IO (Vector.Vector Message)
+readGroupedHeadBatch pool queueName = do
+  batches <-
+    runAdapterIO pool $
+      Stream.toList $
+        Stream.take 1 $
+          pgmqChunks
+            ( (defaultConfig queueName)
+                { visibilityTimeout = 60,
+                  batchSize = 10,
+                  polling = StandardPolling {pollInterval = 0.01},
+                  fifoConfig = Just FifoConfig {readStrategy = HeadPerGroup}
+                }
+            )
+  case batches of
+    [batch] -> pure batch
+    _ -> error "Expected exactly one grouped-head batch"
+
+sendGrouped :: QueueName -> Text -> Text -> Hasql.Session MessageId
+sendGrouped queueName group body =
+  Sessions.sendMessageWithHeaders
+    SendMessageWithHeaders
+      { queueName,
+        messageBody = MessageBody (String body),
+        messageHeaders = groupHeaders group,
+        delay = Just 0
+      }
+
+groupHeaders :: Text -> MessageHeaders
+groupHeaders group = MessageHeaders (object ["x-pgmq-group" .= group])
+
+sortedMessageIds :: Vector.Vector Message -> [MessageId]
+sortedMessageIds = sort . map (\message -> message.messageId) . Vector.toList
 
 -- | Helper to create a config with sensible defaults for testing
 _mkConfig :: QueueName -> PgmqAdapterConfig
