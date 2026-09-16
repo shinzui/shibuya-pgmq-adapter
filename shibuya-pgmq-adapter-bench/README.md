@@ -94,9 +94,12 @@ Environment variables for customizing benchmark behavior:
 - Grouped reads
 - Round-robin reads
 - Group count variations (1, 10, 100 groups)
-- Complete safe drains comparing legacy quantity one with grouped-head quantities 1, 10, and
-  50. Run the release matrix with `--stdev Infinity`; the benchmark performs its own repeated
-  drain-only sampling and prints read count, median, p95, throughput, ratio, and gate result.
+- Complete safe drains compare legacy quantity one with grouped-head quantities 1, 10, and 50
+  for the 10,000-message fixtures. The 100,000-message/10,000-group fixture compares grouped
+  heads at quantities 10 and 50 with grouped-head quantity one; a legacy quantity-one drain at
+  that cardinality requires 100,000 pathological scans and is intentionally excluded. Run the
+  release matrix with `--stdev Infinity`; the benchmark performs its own repeated drain-only
+  sampling and prints read count, median, p95, throughput, ratio, and gate result.
 
 ### Multi-Queue Benchmarks
 - Round-robin send across queues

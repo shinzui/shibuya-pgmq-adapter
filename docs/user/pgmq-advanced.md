@@ -5,18 +5,31 @@ This guide covers FIFO ordering, lease extension, and tuning.
 ## FIFO Ordering
 
 pgmq 1.8.0+ supports grouped message ordering via the `x-pgmq-group` header.
+PGMQ 1.12.0+ additionally supports grouped-head reads, which are the safe choice
+when failed or delayed messages must block later messages in the same group.
 
 ### Setup
 
 ```haskell
 let config = (defaultConfig queueName)
       { fifoConfig = Just FifoConfig
-          { readStrategy = RoundRobin  -- or ThroughputOptimized
+          { readStrategy = HeadPerGroup
           }
       }
 ```
 
 Messages must have the `x-pgmq-group` header. The adapter extracts it and exposes it as `ingested.envelope.partition`.
+
+### HeadPerGroup
+
+Returns at most the oldest message from each group. A batch may contain heads
+from many groups, but never a later message from a group whose head is invisible
+or delayed. This preserves per-group FIFO ordering across retries, failures, and
+batched consumption.
+
+`batchSize` limits the number of groups represented in a read, not the number of
+messages taken from any one group. Use this strategy for strict FIFO processing;
+it requires PGMQ 1.12.0 or later.
 
 ### ThroughputOptimized
 
@@ -31,6 +44,9 @@ Batch 3:    [C:2, C:3, C:4]
 
 Best for: order processing, document workflows - when completing one group matters.
 
+This strategy can lease multiple messages from one group in the same batch. It
+does not by itself make later messages wait for an earlier handler to succeed.
+
 ### RoundRobin
 
 Fair distribution across groups:
@@ -43,6 +59,10 @@ Batch 3:    [A:3, C:3, C:4]
 ```
 
 Best for: multi-tenant systems, load balancing - when fairness across groups matters.
+
+This strategy can also lease a later message from a group before the earlier
+message has been acknowledged. Use `HeadPerGroup` when failures must block the
+group.
 
 ## Lease Extension
 

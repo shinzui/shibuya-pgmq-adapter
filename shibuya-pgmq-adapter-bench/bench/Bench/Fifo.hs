@@ -95,7 +95,8 @@ deleteMessages pool queue msgs = do
 data DrainFixture = DrainFixture
   { fixtureName :: !String,
     fixtureMessages :: !Int,
-    fixtureGroups :: !Int
+    fixtureGroups :: !Int,
+    fixtureBaseline :: !DrainMode
   }
 
 data DrainMode
@@ -111,9 +112,9 @@ safeDrainBenchmarks :: Pool.Pool -> BenchConfig -> Benchmark
 safeDrainBenchmarks pool config =
   bgroup
     "safe-fifo-drain"
-    [ safeDrainMatrix pool config (DrainFixture "10k-one-group" 10_000 1),
-      safeDrainMatrix pool config (DrainFixture "10k-100-groups" 10_000 100),
-      safeDrainMatrix pool config (DrainFixture "100k-10k-groups" 100_000 10_000)
+    [ safeDrainMatrix pool config (DrainFixture "10k-one-group" 10_000 1 LegacyGroupedOne),
+      safeDrainMatrix pool config (DrainFixture "10k-100-groups" 10_000 100 LegacyGroupedOne),
+      safeDrainMatrix pool config (DrainFixture "100k-10k-groups" 100_000 10_000 (GroupedHead 1))
     ]
 
 safeDrainMatrix :: Pool.Pool -> BenchConfig -> DrainFixture -> Benchmark
@@ -123,9 +124,12 @@ safeDrainMatrix pool config fixture =
       replicateM_ (fromIntegral outerRuns) $ do
         samples <-
           replicateM config.safeDrainRuns $ do
-            baseline <- runSafeDrain pool config fixture LegacyGroupedOne
-            heads <- traverse (runSafeDrain pool config fixture . GroupedHead) [1, 10, 50]
-            pure (baseline, zip [1, 10, 50] heads)
+            baseline <- runSafeDrain pool config fixture fixture.fixtureBaseline
+            let headBatches = case fixture.fixtureBaseline of
+                  LegacyGroupedOne -> [1, 10, 50]
+                  GroupedHead _ -> [10, 50]
+            heads <- traverse (runSafeDrain pool config fixture . GroupedHead) headBatches
+            pure (baseline, zip headBatches heads)
         reportDrainMatrix fixture samples
 
 runSafeDrain :: Pool.Pool -> BenchConfig -> DrainFixture -> DrainMode -> IO DrainResult
@@ -175,23 +179,26 @@ reportDrainMatrix :: DrainFixture -> [(DrainResult, [(Int, DrainResult)])] -> IO
 reportDrainMatrix fixture samples = do
   let baselines = map fst samples
       baselineMedian = median (map (.elapsedSeconds) baselines)
-  reportMode fixture "legacy-grouped" 1 baselines Nothing
+      headBatches = case fixture.fixtureBaseline of
+        LegacyGroupedOne -> [1, 10, 50]
+        GroupedHead _ -> [10, 50]
+  reportMode fixture fixture.fixtureBaseline baselines Nothing
   mapM_
     ( \batch -> do
         let results = [result | (_, heads) <- samples, (candidate, result) <- heads, candidate == batch]
             ratio = median (map (.elapsedSeconds) results) / baselineMedian
-        reportMode fixture "grouped-head" batch results (Just ratio)
+        reportMode fixture (GroupedHead batch) results (Just ratio)
     )
-    [1, 10, 50]
+    headBatches
 
-reportMode :: DrainFixture -> String -> Int -> [DrainResult] -> Maybe Double -> IO ()
-reportMode fixture mode batch results ratio = do
+reportMode :: DrainFixture -> DrainMode -> [DrainResult] -> Maybe Double -> IO ()
+reportMode fixture mode results ratio = do
   let times = map (.elapsedSeconds) results
       readSamples = map (.readStatements) results
-      expectedReads =
-        if mode == "grouped-head"
-          then ceilingDiv fixture.fixtureMessages (min batch fixture.fixtureGroups)
-          else fixture.fixtureMessages
+      batch = modeBatch mode
+      expectedReads = case mode of
+        GroupedHead _ -> ceilingDiv fixture.fixtureMessages (min batch fixture.fixtureGroups)
+        LegacyGroupedOne -> fixture.fixtureMessages
       medianSeconds = median times
       p95Seconds = percentile 0.95 times
       throughput = fromIntegral fixture.fixtureMessages / medianSeconds
@@ -208,7 +215,7 @@ reportMode fixture mode batch results ratio = do
     fixture.fixtureName
     fixture.fixtureMessages
     fixture.fixtureGroups
-    mode
+    (modeName mode)
     batch
     (length results)
     (show readSamples)
@@ -239,6 +246,16 @@ modeSuffix :: DrainMode -> Text.Text
 modeSuffix = \case
   LegacyGroupedOne -> "legacy_1"
   GroupedHead batch -> "heads_" <> Text.pack (show batch)
+
+modeName :: DrainMode -> String
+modeName = \case
+  LegacyGroupedOne -> "legacy-grouped"
+  GroupedHead _ -> "grouped-head"
+
+modeBatch :: DrainMode -> Int
+modeBatch = \case
+  LegacyGroupedOne -> 1
+  GroupedHead batch -> batch
 
 nanosecondsToSeconds :: Word64 -> Double
 nanosecondsToSeconds value = fromIntegral value / 1_000_000_000

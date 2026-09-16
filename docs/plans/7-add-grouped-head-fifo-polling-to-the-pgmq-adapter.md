@@ -42,7 +42,7 @@ without a local source override.
   latest adapter release is 0.15.0.0 and exposes only `ThroughputOptimized` and `RoundRobin`.
 - [x] 2026-09-16: Added `HeadPerGroup` dispatch for standard and long polling. The focused
   tests cover all six strategy/polling combinations; the complete adapter suite passed with
-  167 examples and 0 failures under the repository's Nix development shell.
+  169 examples and 0 failures under the repository's Nix development shell.
 - [x] 2026-09-16: Added adapter-path database integration coverage for one-head-per-group,
   invisible-head blocking, settled-head advance, and delayed-head independence. The two focused
   examples pass against ephemeral PostgreSQL.
@@ -50,10 +50,18 @@ without a local source override.
   read-count assertions, median, p95, throughput, and an enforced 20 percent ratio gate. A
   one-sample 10,000-message/100-group smoke run passed and reduced reads from 10,000 to 1,000
   at batch 10 and 200 at batch 50.
-- [ ] M3 remaining: Run the full three-sample release matrix across all three fixtures and
-  retain the results here.
-- [ ] M4: Update public documentation and capability evidence, validate the repository, and
-  release the PVP-breaking adapter version to Hackage and GitHub.
+- [x] 2026-09-16: Collected the three-sample 10,000-message release fixtures. Every grouped-head
+  case passed the 20 percent gate. Across 100 groups, batch ten reduced reads from 10,000 to
+  1,000 and batch fifty reduced them to 200.
+- [x] 2026-09-16: Completed three high-cardinality samples by combining the retained first
+  release-candidate sample with two additional isolated samples. Batch ten and fifty reduced
+  reads from 100,000 to 10,000 and 2,000 and passed at ratios 0.115 and 0.036.
+- [x] 2026-09-16: Updated public documentation, configuration guidance, capability evidence,
+  changelogs, and the 0.16.0.0 package metadata. Formatting, all 169 tests, all-component builds,
+  `cabal check`, the source distribution, strict capability validation, and `nix flake check`
+  pass.
+- [ ] M4 remaining: Publish the validated 0.16.0.0 source and Haddocks to Hackage, push its
+  immutable tag, and create the GitHub release.
 
 
 ## Surprises & Discoveries
@@ -76,6 +84,34 @@ without a local source override.
   and 0.605 seconds (batch fifty). Read counts were 10,000, 10,000, 1,000, and 200 respectively;
   every grouped-head ratio passed the 20 percent gate. These are smoke values, not the final
   three-sample release evidence.
+- Mutation evidence also covers the performance guard: forcing every grouped-head query to
+  quantity one made the batch-ten case report 10,000 reads instead of the expected 1,000, and
+  the benchmark failed with `unexpected safe FIFO read count`. The requested batch dispatch
+  was restored before the release matrix.
+- A full legacy quantity-one drain is not a viable baseline for the 100,000-message/10,000-group
+  fixture. After about 20 minutes it had completed only 123 of 100,000 reads; three samples
+  would take days. The run was stopped without retaining a timing result. The release matrix
+  keeps legacy quantity one for both 10,000-message fixtures and uses grouped-head quantity one
+  as the safe baseline for the high-cardinality fixture.
+- On the Apple M1 Max/64 GB release host with PostgreSQL 17.10, the three-sample 10,000-message
+  one-group fixture measured legacy quantity one at median 29.953141 s, p95 32.980475 s, and
+  333.85 messages/s. Grouped heads measured 14.794956 s/14.900047 s/675.91 messages/s at
+  quantity one (ratio 0.494), 14.160436 s/15.041024 s/706.19 messages/s at quantity ten
+  (ratio 0.473), and 21.275268 s/22.499027 s/470.03 messages/s at quantity fifty (ratio 0.710).
+  Every case necessarily used 10,000 reads because one group exposes only one absolute head.
+- On the same host, the three-sample 10,000-message/100-group fixture measured legacy quantity
+  one at median 77.516639 s, p95 99.496990 s, and 129.00 messages/s over 10,000 reads. Grouped
+  heads measured 13.305524 s/13.652526 s/751.57 messages/s over 10,000 reads at quantity one
+  (ratio 0.172), 1.595694 s/1.622075 s/6,266.87 messages/s over 1,000 reads at quantity ten
+  (ratio 0.021), and 0.562668 s/0.583603 s/17,772.47 messages/s over 200 reads at quantity fifty
+  (ratio 0.007). All ratios passed the gate.
+- The three-sample 100,000-message/10,000-group fixture used grouped-head quantity one as its
+  safe baseline. Its sample times were 1,128.905983 s, 974.735206 s, and 1,044.325426 s: median
+  1,044.325426 s, p95 1,128.905983 s, 95.76 messages/s, and 100,000 reads. Quantity ten used
+  10,000 reads with samples 127.456734 s, 115.160096 s, and 120.252500 s: median 120.252500 s,
+  p95 127.456734 s, 831.58 messages/s, ratio 0.115. Quantity fifty used 2,000 reads with samples
+  42.513543 s, 35.181133 s, and 37.467157 s: median 37.467157 s, p95 42.513543 s, 2,669.00
+  messages/s, ratio 0.036. Both batched cases passed the gate.
 
 
 ## Decision Log
@@ -97,13 +133,24 @@ without a local source override.
   release benchmark can measure realistic query cost without making CI timing-sensitive.
   Date: 2026-09-16
 
+- Decision: Use grouped-head quantity one, rather than legacy grouped quantity one, as the
+  100,000-message/10,000-group baseline.
+  Rationale: Both modes provide one-message safe consumption, but the legacy query performed
+  only 123 reads in about 20 minutes on that fixture. Retaining it would turn a release check
+  into a multi-day job. The smaller fixtures still measure the migration from the legacy safe
+  baseline, while the large fixture measures the batching gain at realistic group cardinality.
+  Date: 2026-09-16
+
 
 ## Outcomes & Retrospective
 
 M1 and M2 are complete. `HeadPerGroup` is public and dispatches through the released pgmq-hs
 grouped-head effects without changing retry, prefetch, finalization, or telemetry logic. Real
 PostgreSQL coverage proves absolute-head blocking and independent groups, and its mutation check
-fails on the unsafe legacy dispatch. Performance evidence, documentation, and release remain.
+fails on the unsafe legacy dispatch. The complete three-fixture performance matrix passes.
+Multi-group batches reduce statements by 10x at quantity ten and 50x at quantity fifty, including
+the 100,000-message fixture. Documentation and repository validation are complete; publication of
+0.16.0.0 remains.
 
 
 ## Context and Orientation
@@ -164,8 +211,10 @@ when the database tests pass against the ephemeral PGMQ 1.12-compatible schema.
 Replace or extend `Bench.Fifo` with a `safe-fifo-drain` benchmark group. A safe drain repeatedly
 reads and batch-deletes until the known fixture count is gone, returning the number of read
 statements as evidence. Compare legacy grouped quantity one with grouped-head quantities 1,
-10, and 50 for 10,000 messages in one group, 10,000 across 100 groups, and 100,000 across
-10,000 groups. Use only the conventional FIFO GIN index. Record machine, PostgreSQL version,
+10, and 50 for 10,000 messages in one group and 10,000 across 100 groups. For the
+100,000-message/10,000-group fixture, compare grouped-head quantities 10 and 50 with
+grouped-head quantity one; the discovery log explains why the legacy full drain is intractable
+there. Use only the conventional FIFO GIN index. Record machine, PostgreSQL version,
 fixture, batch, read count, median, p95, throughput, and whether each grouped-head case is no
 more than 20 percent slower than its safe quantity-one baseline. If the gate fails, retain
 `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` evidence and do not recommend the strategy until the
@@ -202,8 +251,8 @@ Run the performance matrix only against the disposable local database:
 ```bash
 just process-up
 export PGHOST="$PWD/db"
-export PGDATABASE=shibuya
-export PG_CONNECTION_STRING="postgresql:///shibuya?host=$(jq -rn --arg x "$PGHOST" '$x|@uri')"
+export PGDATABASE=shibuya_pgmq_adapter
+export PG_CONNECTION_STRING="postgresql:///shibuya_pgmq_adapter?host=$(jq -rn --arg x "$PGHOST" '$x|@uri')"
 BENCH_SAFE_FIFO_RUNS=3 nix develop -c cabal bench shibuya-pgmq-adapter-bench \
   --benchmark-options='-p safe-fifo-drain --stdev Infinity'
 ```

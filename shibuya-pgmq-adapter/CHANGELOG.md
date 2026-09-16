@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.16.0.0 — 2026-09-16
+
+### Breaking Changes
+
+- `FifoReadStrategy` gains the public `HeadPerGroup` constructor. Exhaustive
+  matches over the strategy type must handle the new case.
+
+### Features
+
+- `HeadPerGroup` uses PGMQ's grouped-head reads with either polling mode. A
+  failed or delayed head blocks only its own group while a batch can still
+  contain heads from many groups. PGMQ 1.12.0 or later is required.
+
+### Tests and Benchmarks
+
+- Added exact dispatch coverage, PostgreSQL failure/delay integration tests,
+  and a full-drain performance matrix for safe FIFO batch sizes 1, 10, and 50.
+
 ## 0.15.0.0 — 2026-09-14
 
 Driven by the `pgmq-hs` 0.6 release. The adapter remains paired with `shibuya-core 0.9.0.0`,

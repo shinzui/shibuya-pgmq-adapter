@@ -1,5 +1,13 @@
 # Capability catalog log
 
+## 2026-09-16
+
+* **Strengthen CAP-3**: Added the `HeadPerGroup` strategy, exact dispatch tests,
+  PostgreSQL integration evidence for failed and delayed group heads, and a
+  full-drain benchmark matrix. CAP-3 now distinguishes strict grouped-head FIFO
+  barriers from the legacy batch-fill strategies and records the PGMQ 1.12.0
+  requirement.
+
 ## 2026-08-10
 
 * **Enhance CAP-2 evidence**: Documented the 0.14 structured DLQ reason contract

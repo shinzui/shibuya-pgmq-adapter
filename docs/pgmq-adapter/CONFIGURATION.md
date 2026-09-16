@@ -305,6 +305,7 @@ data FifoConfig = FifoConfig
 data FifoReadStrategy
   = ThroughputOptimized
   | RoundRobin
+  | HeadPerGroup
 ```
 
 ### Requirements
@@ -312,6 +313,16 @@ data FifoReadStrategy
 - pgmq 1.8.0 or later
 - FIFO indexes created on the queue
 - Messages must have `x-pgmq-group` header
+
+`HeadPerGroup` requires pgmq 1.12.0 or later.
+
+### HeadPerGroup
+
+Returns no more than the oldest message from each group. Invisible or delayed
+group heads block later messages in that group while other groups remain
+eligible. `batchSize` therefore bounds the number of groups represented in a
+read. Choose this strategy when retries and handler failures must preserve
+strict per-group FIFO ordering under batched consumption.
 
 ### ThroughputOptimized
 
@@ -329,6 +340,9 @@ Batch 3:    [C:2, C:3, C:4]
 - You want to complete one group before starting another
 - Example: Order processing (process all items for order 1, then order 2)
 
+This fill strategy may lease multiple messages from one group at once. It is
+not a strict failure barrier; choose `HeadPerGroup` for that contract.
+
 ### RoundRobin
 
 Fair distribution across groups.
@@ -344,6 +358,10 @@ Batch 3:    [A:3, C:3, C:4]
 - Fairness across groups is important
 - No single group should monopolize processing
 - Example: Multi-tenant systems (fair processing across tenants)
+
+Round-robin filling may still lease a later message from a group before its
+earlier message is acknowledged. Choose `HeadPerGroup` for strict FIFO failure
+isolation.
 
 ### Partition Extraction
 
