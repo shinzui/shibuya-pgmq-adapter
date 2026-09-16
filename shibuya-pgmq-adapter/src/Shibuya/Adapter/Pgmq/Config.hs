@@ -256,6 +256,12 @@ data FifoReadStrategy
     ThroughputOptimized
   | -- | Fair round-robin distribution across groups.
     RoundRobin
+  | -- | Lease at most one absolute head from each group (PGMQ 1.12+).
+    --
+    -- An invisible or delayed head blocks its group. 'PgmqAdapterConfig.batchSize'
+    -- bounds the number of groups claimed by one read, rather than the number of
+    -- members claimed from a single group.
+    HeadPerGroup
   deriving stock (Show, Eq, Generic)
 
 -- | Default polling configuration using standard polling with 1 second interval.

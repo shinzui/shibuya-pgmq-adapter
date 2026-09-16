@@ -67,6 +67,8 @@ import Pgmq.Effectful.Effect
     changeVisibilityTimeout,
     deleteMessage,
     readGrouped,
+    readGroupedHead,
+    readGroupedHeadWithPoll,
     readGroupedRoundRobin,
     readGroupedRoundRobinWithPoll,
     readGroupedWithPoll,
@@ -466,6 +468,7 @@ pgmqChunks config = Stream.repeatM (retryingTransient config.pollRetry poll)
         result <- case fifo.readStrategy of
           ThroughputOptimized -> readGrouped (mkReadGrouped config)
           RoundRobin -> readGroupedRoundRobin (mkReadGrouped config)
+          HeadPerGroup -> readGroupedHead (mkReadGrouped config)
         when (Vector.null result) $
           liftIO $
             threadDelay (nominalToMicros interval)
@@ -476,6 +479,8 @@ pgmqChunks config = Stream.repeatM (retryingTransient config.pollRetry poll)
             readGroupedWithPoll (mkReadGroupedWithPoll config maxSec intervalMs)
           RoundRobin ->
             readGroupedRoundRobinWithPoll (mkReadGroupedWithPoll config maxSec intervalMs)
+          HeadPerGroup ->
+            readGroupedHeadWithPoll (mkReadGroupedWithPoll config maxSec intervalMs)
 
     nominalToMicros :: NominalDiffTime -> Int
     nominalToMicros t = floor (nominalDiffTimeToSeconds t * 1_000_000)

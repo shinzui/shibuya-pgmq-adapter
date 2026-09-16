@@ -7,18 +7,21 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int32)
+import Data.Text (Text)
 import Data.Time (NominalDiffTime, UTCTime (..), fromGregorian)
 import Data.Vector qualified as Vector
-import Effectful (Eff, IOE, liftIO, runEff)
+import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Hasql.Errors qualified as HasqlErrors
 import Pgmq.Effectful (Pgmq, PgmqRuntimeError (..))
 import Pgmq.Effectful.Effect qualified as PgmqEffect
-import Pgmq.Hasql.Statements.Types (ReadGrouped (..), ReadMessage (..), ReadWithPollMessage (..))
-import Pgmq.Types (Message (..), MessageBody (..), MessageId (..), parseQueueName)
+import Pgmq.Hasql.Statements.Types (ReadGrouped (..), ReadGroupedWithPoll (..), ReadMessage (..), ReadWithPollMessage (..))
+import Pgmq.Types (Message (..), MessageBody (..), MessageId (..), parseQueueName, queueNameToText)
 import Shibuya.Adapter.Pgmq.Config
-  ( PgmqAdapterConfig (..),
+  ( FifoConfig (..),
+    FifoReadStrategy (..),
+    PgmqAdapterConfig (..),
     PollRetryConfig (..),
     PollingConfig (..),
     defaultPollRetryConfig,
@@ -42,6 +45,7 @@ spec = do
   mkReadMessageSpec
   mkReadWithPollSpec
   mkReadGroupedSpec
+  fifoDispatchSpec
   pollRetrySpec
   autoDeadLetterHookSpec
   mergeDlqHeadersSpec
@@ -199,6 +203,103 @@ mkReadGroupedSpec = describe "mkReadGrouped" $ do
 
   it "sets qty to batchSize" $ do
     queryQty `shouldBe` 20
+
+data FifoPollCall = FifoPollCall
+  { operation :: !String,
+    queue :: !Text,
+    delay :: !Int32,
+    quantity :: !Int32,
+    pollParameters :: !(Maybe (Int32, Int32))
+  }
+  deriving stock (Eq, Show)
+
+fifoDispatchSpec :: Spec
+fifoDispatchSpec = describe "pgmqChunks FIFO dispatch" $ do
+  let standard = StandardPolling {pollInterval = 1}
+      long = LongPolling {maxPollSeconds = 5, pollIntervalMs = 100}
+      cases =
+        [ ("throughput standard", ThroughputOptimized, standard, "readGrouped", Nothing),
+          ("round-robin standard", RoundRobin, standard, "readGroupedRoundRobin", Nothing),
+          ("head-per-group standard", HeadPerGroup, standard, "readGroupedHead", Nothing),
+          ("throughput long poll", ThroughputOptimized, long, "readGroupedWithPoll", Just (5, 100)),
+          ("round-robin long poll", RoundRobin, long, "readGroupedRoundRobinWithPoll", Just (5, 100)),
+          ("head-per-group long poll", HeadPerGroup, long, "readGroupedHeadWithPoll", Just (5, 100))
+        ]
+  mapM_
+    ( \(label, strategy, pollingConfig, expectedOperation, expectedPoll) ->
+        it ("selects " <> label) $ do
+          (result, calls) <- observeFifoPoll strategy pollingConfig
+          result `shouldBe` Right [Vector.singleton testMessage]
+          calls
+            `shouldBe` [ FifoPollCall
+                           { operation = expectedOperation,
+                             queue = "fifo_dispatch",
+                             delay = 45,
+                             quantity = 7,
+                             pollParameters = expectedPoll
+                           }
+                       ]
+    )
+    cases
+
+observeFifoPoll :: FifoReadStrategy -> PollingConfig -> IO (Either PgmqRuntimeError [Vector.Vector Message], [FifoPollCall])
+observeFifoPoll strategy pollingConfig = do
+  calls <- newIORef []
+  result <-
+    runEff $
+      runErrorNoCallStack $
+        interpret
+          ( \_ -> \case
+              PgmqEffect.ReadGrouped query -> recordStandard calls "readGrouped" query
+              PgmqEffect.ReadGroupedRoundRobin query -> recordStandard calls "readGroupedRoundRobin" query
+              PgmqEffect.ReadGroupedHead query -> recordStandard calls "readGroupedHead" query
+              PgmqEffect.ReadGroupedWithPoll query -> recordLong calls "readGroupedWithPoll" query
+              PgmqEffect.ReadGroupedRoundRobinWithPoll query -> recordLong calls "readGroupedRoundRobinWithPoll" query
+              PgmqEffect.ReadGroupedHeadWithPoll query -> recordLong calls "readGroupedHeadWithPoll" query
+              _ -> error "unexpected Pgmq operation in FIFO dispatch test"
+          )
+          (Stream.toList (Stream.take 1 (pgmqChunks (fifoDispatchConfig strategy pollingConfig))))
+  observed <- readIORef calls
+  pure (result, reverse observed)
+
+recordStandard :: (IOE :> es) => IORef [FifoPollCall] -> String -> ReadGrouped -> Eff es (Vector.Vector Message)
+recordStandard calls operation ReadGrouped {queueName, visibilityTimeout, qty} = do
+  liftIO $
+    atomicModifyIORef'
+      calls
+      (\xs -> (FifoPollCall operation (queueNameToText queueName) visibilityTimeout qty Nothing : xs, ()))
+  pure (Vector.singleton testMessage)
+
+recordLong :: (IOE :> es) => IORef [FifoPollCall] -> String -> ReadGroupedWithPoll -> Eff es (Vector.Vector Message)
+recordLong calls operation ReadGroupedWithPoll {queueName, visibilityTimeout, qty, maxPollSeconds, pollIntervalMs} = do
+  liftIO $
+    atomicModifyIORef'
+      calls
+      ( \xs ->
+          ( FifoPollCall
+              operation
+              (queueNameToText queueName)
+              visibilityTimeout
+              qty
+              (Just (maxPollSeconds, pollIntervalMs))
+              : xs,
+            ()
+          )
+      )
+  pure (Vector.singleton testMessage)
+
+fifoDispatchConfig :: FifoReadStrategy -> PollingConfig -> PgmqAdapterConfig
+fifoDispatchConfig strategy pollingConfig =
+  let queueName = case parseQueueName "fifo_dispatch" of
+        Right q -> q
+        Left e -> error $ "Unexpected: " <> show e
+   in (retryTestConfig 1)
+        { queueName = queueName,
+          visibilityTimeout = 45,
+          batchSize = 7,
+          polling = pollingConfig,
+          fifoConfig = Just FifoConfig {readStrategy = strategy}
+        }
 
 pollRetrySpec :: Spec
 pollRetrySpec = describe "pgmqChunks poll retry" $ do
@@ -389,6 +490,8 @@ runStubPgmq calls respond action =
             PgmqEffect.ReadWithPoll _ -> nextPoll
             PgmqEffect.ReadGrouped _ -> nextPoll
             PgmqEffect.ReadGroupedWithPoll _ -> nextPoll
+            PgmqEffect.ReadGroupedHead _ -> nextPoll
+            PgmqEffect.ReadGroupedHeadWithPoll _ -> nextPoll
             PgmqEffect.ReadGroupedRoundRobin _ -> nextPoll
             PgmqEffect.ReadGroupedRoundRobinWithPoll _ -> nextPoll
             _ -> error "unexpected Pgmq operation in retry test"

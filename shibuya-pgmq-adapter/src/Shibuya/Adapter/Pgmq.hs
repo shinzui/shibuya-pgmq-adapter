@@ -64,10 +64,11 @@
 -- == FIFO Support
 --
 -- For ordered message processing, configure 'fifoConfig'. Messages are
--- grouped by the @x-pgmq-group@ header. Two strategies are available:
+-- grouped by the @x-pgmq-group@ header. Three strategies are available:
 --
 -- * 'ThroughputOptimized': Fill batches from the same group (SQS-like)
 -- * 'RoundRobin': Fair distribution across groups
+-- * 'HeadPerGroup': Lease at most one absolute head from each group (PGMQ 1.12+)
 module Shibuya.Adapter.Pgmq
   ( -- * Adapter
     pgmqAdapter,
