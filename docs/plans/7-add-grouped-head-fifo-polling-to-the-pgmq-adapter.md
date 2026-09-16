@@ -46,7 +46,12 @@ without a local source override.
 - [x] 2026-09-16: Added adapter-path database integration coverage for one-head-per-group,
   invisible-head blocking, settled-head advance, and delayed-head independence. The two focused
   examples pass against ephemeral PostgreSQL.
-- [ ] M3: Add realistic safe-drain benchmark cases and capture same-machine performance evidence.
+- [x] 2026-09-16: Added and compiled the safe-drain matrix with independent drain-only timing,
+  read-count assertions, median, p95, throughput, and an enforced 20 percent ratio gate. A
+  one-sample 10,000-message/100-group smoke run passed and reduced reads from 10,000 to 1,000
+  at batch 10 and 200 at batch 50.
+- [ ] M3 remaining: Run the full three-sample release matrix across all three fixtures and
+  retain the results here.
 - [ ] M4: Update public documentation and capability evidence, validate the repository, and
   release the PVP-breaking adapter version to Hackage and GitHub.
 
@@ -66,6 +71,11 @@ without a local source override.
   `HeadPerGroup` through `readGrouped` changed the first batch from expected IDs `[1,3]` to
   `[1,2,3,4]` and failed the one-head-per-group assertion. Restoring `readGroupedHead` makes
   both focused examples pass.
+- The 10,000-message/100-group benchmark smoke run measured the safe legacy quantity-one drain
+  at 96.212 seconds and grouped heads at 14.483 seconds (batch one), 1.636 seconds (batch ten),
+  and 0.605 seconds (batch fifty). Read counts were 10,000, 10,000, 1,000, and 200 respectively;
+  every grouped-head ratio passed the 20 percent gate. These are smoke values, not the final
+  three-sample release evidence.
 
 
 ## Decision Log
@@ -194,8 +204,8 @@ just process-up
 export PGHOST="$PWD/db"
 export PGDATABASE=shibuya
 export PG_CONNECTION_STRING="postgresql:///shibuya?host=$(jq -rn --arg x "$PGHOST" '$x|@uri')"
-BENCH_MESSAGE_COUNT=10000 BENCH_BATCH_SIZES=1,10,50 \
-  cabal bench shibuya-pgmq-adapter-bench --benchmark-options='-p safe-fifo-drain --stdev 10'
+BENCH_SAFE_FIFO_RUNS=3 nix develop -c cabal bench shibuya-pgmq-adapter-bench \
+  --benchmark-options='-p safe-fifo-drain --stdev Infinity'
 ```
 
 Before release, verify authority again and validate the package artifact:

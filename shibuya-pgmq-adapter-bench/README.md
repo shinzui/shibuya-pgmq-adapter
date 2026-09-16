@@ -67,6 +67,7 @@ Environment variables for customizing benchmark behavior:
 | `BENCH_QUEUE_COUNT` | 4 | Number of queues for multi-queue tests |
 | `BENCH_CONCURRENCY` | 4 | Concurrent workers for concurrency tests |
 | `BENCH_PAYLOAD_SIZES` | small,medium,large | Payload size variants |
+| `BENCH_SAFE_FIFO_RUNS` | 3 | Drain-only samples collected for median and p95 in each safe FIFO matrix entry |
 | `BENCH_SKIP_CLEANUP` | false | Skip queue cleanup after benchmarks |
 
 ## Benchmark Categories
@@ -93,6 +94,9 @@ Environment variables for customizing benchmark behavior:
 - Grouped reads
 - Round-robin reads
 - Group count variations (1, 10, 100 groups)
+- Complete safe drains comparing legacy quantity one with grouped-head quantities 1, 10, and
+  50. Run the release matrix with `--stdev Infinity`; the benchmark performs its own repeated
+  drain-only sampling and prints read count, median, p95, throughput, ratio, and gate result.
 
 ### Multi-Queue Benchmarks
 - Round-robin send across queues

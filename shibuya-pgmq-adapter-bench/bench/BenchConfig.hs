@@ -47,6 +47,8 @@ data BenchConfig = BenchConfig
     concurrency :: !Int,
     -- | Payload size variants to test (default: [Small, Medium, Large])
     payloadSizes :: ![PayloadSize],
+    -- | Repetitions used by each safe FIFO drain matrix entry (default: 3)
+    safeDrainRuns :: !Int,
     -- | Skip queue cleanup after benchmarks (default: False)
     skipCleanup :: !Bool
   }
@@ -61,6 +63,7 @@ loadConfig = do
   queues <- getEnvIntDefault "BENCH_QUEUE_COUNT" 4
   workers <- getEnvIntDefault "BENCH_CONCURRENCY" 4
   payloads <- getEnvPayloadSizes "BENCH_PAYLOAD_SIZES" [Small, Medium, Large]
+  drainRuns <- getEnvIntDefault "BENCH_SAFE_FIFO_RUNS" 3
   cleanup <- getEnvBoolDefault "BENCH_SKIP_CLEANUP" False
 
   pure
@@ -71,6 +74,7 @@ loadConfig = do
         queueCount = queues,
         concurrency = workers,
         payloadSizes = payloads,
+        safeDrainRuns = max 1 drainRuns,
         skipCleanup = cleanup
       }
 
