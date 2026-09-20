@@ -5,6 +5,17 @@ description: "A thin management surface for pgmq topic bindings (bind, unbind, l
 generated:
   by: claude-code/1.0
   at: "2026-08-08T00:00:00Z"
+reviews:
+  - kind: model
+    reviewer: process:openai-codex
+    reviewed_at: "2026-09-20T21:05:00Z"
+    document_timestamp: "2026-08-08T00:00:00Z"
+    scope: content-and-metadata
+    outcome: approved
+    context: "Repository source, the full adapter test suite, capability evidence, and the EP-41 lifecycle audit."
+    provider: openai
+    model: gpt-6-astra
+    effort: high
 capabilityId: CAP-6
 provider: mori://shinzui/shibuya-pgmq-adapter
 status: shipped
