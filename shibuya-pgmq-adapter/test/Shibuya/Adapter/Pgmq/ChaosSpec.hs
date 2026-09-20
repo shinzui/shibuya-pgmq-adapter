@@ -856,6 +856,25 @@ gracefulShutdownSpec = describe "Graceful shutdown" $ do
 
     drained `shouldBe` True
 
+  it "returns the same completed result for a repeated shutdown" $ \TestFixture {pool, queueName, dlqName = _} -> do
+    let config =
+          (defaultConfig queueName)
+            { polling = StandardPolling {pollInterval = 0.1}
+            }
+
+    outcomes <- runAdapterIO pool $ runTracingNoop $ do
+      adapter <- requireAdapter pool config
+      appResult <- runApp defaultAppConfig [(ProcessorId "repeated-stop-test", mkProcessor adapter (\_ -> pure AckOk))]
+      case appResult of
+        Left err -> liftIO $ expectationFailure ("Failed to start app: " <> show err) >> pure (False, False)
+        Right appHandle -> do
+          let shutdownConfig = defaultShutdownConfig {drainTimeout = 2}
+          first <- stopAppGracefully shutdownConfig appHandle
+          second <- stopAppGracefully shutdownConfig appHandle
+          pure (first, second)
+
+    outcomes `shouldBe` (True, True)
+
   it "processes in-flight messages during shutdown" $ \TestFixture {pool, queueName, dlqName = _} -> do
     -- Send multiple messages
     forM_ [1 .. 5 :: Int] $ \i ->
