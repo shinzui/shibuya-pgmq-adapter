@@ -30,12 +30,14 @@ import Shibuya.Adapter.Pgmq.Config
 import Shibuya.Adapter.Pgmq.Internal
   ( finalizeAutoDeadLetter,
     mergeDlqHeaders,
+    mkLease,
     mkReadGrouped,
     mkReadMessage,
     mkReadWithPoll,
     nominalToSeconds,
     pgmqChunks,
   )
+import Shibuya.Core.Lease (Lease (..))
 import Streamly.Data.Stream qualified as Stream
 import Test.Hspec
 
@@ -47,6 +49,7 @@ spec = do
   mkReadGroupedSpec
   fifoDispatchSpec
   pollRetrySpec
+  leaseRetrySpec
   autoDeadLetterHookSpec
   mergeDlqHeadersSpec
 
@@ -330,6 +333,33 @@ pollRetrySpec = describe "pgmqChunks poll retry" $ do
     result `shouldBe` Left transientError
     readIORef calls `shouldReturn` 2
 
+leaseRetrySpec :: Spec
+leaseRetrySpec = describe "lease renewal retry" $ do
+  it "recovers from a transient renewal outage within the configured budget" $ do
+    calls <- newIORef (0 :: Int)
+    let cfg = (retryTestConfig 1) {ackRetry = PollRetryConfig 3 0 0}
+        action :: Eff '[Pgmq, Error PgmqRuntimeError, IOE] ()
+        action = do
+          lease <- mkLease cfg testMessage
+          lease.leaseExtend 30
+
+    result <-
+      runEff $
+        runErrorNoCallStack $
+          interpret
+            ( \_ -> \case
+                PgmqEffect.SetVisibilityTimeoutAt _ -> do
+                  attempt <- liftIO $ atomicModifyIORef' calls (\n -> let next = n + 1 in (next, next))
+                  if attempt < 3
+                    then throwError transientError
+                    else pure $ Just testMessage
+                _ -> error "unexpected PGMQ operation in lease renewal retry test"
+            )
+            action
+
+    result `shouldBe` Right ()
+    readIORef calls `shouldReturn` 3
+
 autoDeadLetterHookSpec :: Spec
 autoDeadLetterHookSpec = describe "finalizeAutoDeadLetter" $ do
   it "calls the auto-DLQ hook only after finalize succeeds" $ do
@@ -362,7 +392,7 @@ autoDeadLetterHookSpec = describe "finalizeAutoDeadLetter" $ do
 
     result <- runEff $ runErrorNoCallStack action
 
-    result `shouldBe` Right ()
+    result `shouldBe` Left permanentError
     readIORef autoCalls `shouldReturn` 0
     readIORef failureCalls `shouldReturn` 1
 

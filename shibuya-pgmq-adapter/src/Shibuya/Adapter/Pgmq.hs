@@ -72,6 +72,7 @@
 module Shibuya.Adapter.Pgmq
   ( -- * Adapter
     pgmqAdapter,
+    PgmqAcknowledgementException (..),
 
     -- * Configuration
     PgmqAdapterConfig (..),
@@ -166,7 +167,7 @@ import Shibuya.Adapter.Pgmq.Config
     topicDeadLetter,
     validateConfig,
   )
-import Shibuya.Adapter.Pgmq.Internal (mkIngested, pgmqChunks, pgmqChunksPrefetch, releaseMessages)
+import Shibuya.Adapter.Pgmq.Internal (PgmqAcknowledgementException (..), mkIngested, pgmqChunks, pgmqChunksPrefetch, releaseMessages)
 import Shibuya.Core.Ingested (Ingested)
 import Shibuya.Telemetry.Effect (Tracing)
 import Streamly.Data.Stream (Stream)

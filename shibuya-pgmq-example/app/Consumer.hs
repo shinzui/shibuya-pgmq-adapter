@@ -55,8 +55,9 @@ import Shibuya.Adapter.Pgmq
 import Shibuya.Adapter.Pgmq qualified as Pgmq
 import Shibuya.App
   ( ProcessorId (..),
-    ShutdownConfig (..),
+    ShutdownConfig (drainTimeout),
     defaultAppConfig,
+    defaultShutdownConfig,
     getAppMaster,
     mkProcessor,
     runApp,
@@ -391,7 +392,7 @@ runBackoffDemoConsumer pool tracer policy failuresRef shutdownVar = do
         liftIO $ Text.putStrLn ""
         liftIO $ Text.putStrLn "Received shutdown signal, stopping gracefully..."
 
-        let shutdownConfig = ShutdownConfig {drainTimeout = 30}
+        let shutdownConfig = defaultShutdownConfig {drainTimeout = 30}
         drained <- stopAppGracefully shutdownConfig appHandle
         if drained
           then liftIO $ Text.putStrLn "All processors drained cleanly"
@@ -457,7 +458,7 @@ runConsumer pool tracer metricsPort shutdownVar = do
           Text.putStrLn "Received shutdown signal, stopping gracefully..."
 
         -- Graceful shutdown
-        let shutdownConfig = ShutdownConfig {drainTimeout = 30}
+        let shutdownConfig = defaultShutdownConfig {drainTimeout = 30}
         drained <- stopAppGracefully shutdownConfig appHandle
         if drained
           then liftIO $ Text.putStrLn "All processors drained cleanly"

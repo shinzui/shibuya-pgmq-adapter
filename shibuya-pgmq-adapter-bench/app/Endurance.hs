@@ -51,8 +51,9 @@ import Shibuya.Adapter.Pgmq
   )
 import Shibuya.App
   ( ProcessorId (..),
-    ShutdownConfig (..),
+    ShutdownConfig (drainTimeout),
     defaultAppConfig,
+    defaultShutdownConfig,
     mkProcessor,
     runApp,
     stopAppGracefully,
@@ -349,7 +350,7 @@ runEnduranceTest config pool queueName = do
             cancel producerAsync
             cancel samplerAsync
 
-          let shutdownConfig = ShutdownConfig {drainTimeout = 30}
+          let shutdownConfig = defaultShutdownConfig {drainTimeout = 30}
           _ <- stopAppGracefully shutdownConfig appHandle
           pure ()
 

@@ -13,6 +13,7 @@ module Shibuya.Adapter.Pgmq.Internal
     finalizeAutoDeadLetter,
 
     -- * AckHandle Construction
+    PgmqAcknowledgementException (..),
     mkAckHandle,
     mergeDlqHeaders,
 
@@ -32,14 +33,16 @@ module Shibuya.Adapter.Pgmq.Internal
 where
 
 import Control.Concurrent (threadDelay)
-import Control.Monad (void, when)
+import Control.Concurrent.MVar (newMVar, putMVar, takeMVar)
+import Control.Exception qualified as BaseException
+import Control.Monad (unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Foldable (traverse_)
 import Data.Function ((&))
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.IORef (atomicWriteIORef, newIORef, readIORef, writeIORef)
 import Data.Int (Int32)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TE
@@ -56,6 +59,7 @@ import Effectful
     (:>),
   )
 import Effectful.Error.Static (Error, catchError, throwError)
+import Effectful.Exception qualified as Exception
 import Hasql.Pool qualified as Pool
 import Hasql.Transaction qualified as Transaction
 import Hasql.Transaction.Sessions qualified as Transaction.Sessions
@@ -117,6 +121,15 @@ import Streamly.Data.Stream (Stream)
 import Streamly.Data.Stream qualified as Stream
 import Streamly.Data.Stream.Prelude qualified as StreamP
 import Streamly.Data.Unfold qualified as Unfold
+
+-- | A PGMQ acknowledgement operation failed after the adapter's bounded retry
+-- budget. This synchronous exception crosses Shibuya's finalizer boundary so
+-- core can retain the delivery as a lifecycle failure even after ingestion has
+-- already stopped.
+newtype PgmqAcknowledgementException = PgmqAcknowledgementException PgmqRuntimeError
+  deriving stock (Show)
+
+instance BaseException.Exception PgmqAcknowledgementException
 
 -- | Convert 'NominalDiffTime' to seconds as 'Int32', saturating at the
 -- 'Int32' bounds.
@@ -225,16 +238,23 @@ mkAckHandle ::
   (Pgmq :> es, Error PgmqRuntimeError :> es, IOE :> es, Tracing :> es) =>
   PgmqAdapterEnv ->
   PgmqAdapterConfig ->
-  IORef Bool ->
   Pgmq.Message ->
-  AckHandle es
-mkAckHandle env config finalizedRef msg = AckHandle $ \decision -> do
-  alreadyFinalized <- liftIO $ readIORef finalizedRef
-  if alreadyFinalized
-    then pure ()
-    else do
-      runDecision decision
-      liftIO $ writeIORef finalizedRef True
+  Eff es (AckHandle es)
+mkAckHandle env config msg = do
+  finalizerLock <- liftIO $ newMVar ()
+  finalizedRef <- liftIO $ newIORef False
+  pure $ AckHandle $ \decision ->
+    Exception.bracket_
+      (liftIO $ takeMVar finalizerLock)
+      (liftIO $ putMVar finalizerLock ())
+      $ do
+        alreadyFinalized <- liftIO $ readIORef finalizedRef
+        unless alreadyFinalized $ do
+          runDecision decision
+            `catchError` \_callStack err -> do
+              liftIO $ env.onAckFailure msg err
+              Exception.throwIO (PgmqAcknowledgementException err)
+          liftIO $ atomicWriteIORef finalizedRef True
   where
     queueName = config.queueName
     msgId = msg.messageId
@@ -297,7 +317,12 @@ deadLetterTransactionally env config dlqConfig msg reason dlqHeaders = do
         Transaction.Sessions.Write
         tx
     tx = do
-      case dlqConfig.dlqTarget of
+      -- Claim the source row before producing the DLQ copy. If the transaction
+      -- committed but its response was lost, a retry observes False and emits
+      -- nothing. If the send fails, PostgreSQL rolls the delete back with the
+      -- rest of the transaction, leaving the source recoverable.
+      claimed <- Transaction.statement sourceQuery Msg.deleteMessage
+      when claimed $ case dlqConfig.dlqTarget of
         DirectQueue dlqQueueName ->
           case dlqHeaders of
             Just headers ->
@@ -340,7 +365,6 @@ deadLetterTransactionally env config dlqConfig msg reason dlqHeaders = do
                       delay = Nothing
                     }
                   Msg.sendTopic
-      void $ Transaction.statement sourceQuery Msg.deleteMessage
 
 -- | Merge the consumer's current trace headers with the original
 -- message's headers JSON for the DLQ-write path.
@@ -403,9 +427,8 @@ mkIngested ::
   Pgmq.Message ->
   Eff es (Maybe (Ingested es Value))
 mkIngested env config msg = do
-  finalizedRef <- liftIO $ newIORef False
   lease <- mkLease config msg
-  let ackHandle = mkAckHandle env config finalizedRef msg
+  ackHandle <- mkAckHandle env config msg
   -- Check if max retries exceeded
   if msg.readCount > config.maxRetries
     then do
@@ -435,7 +458,9 @@ finalizeAutoDeadLetter ::
   Eff es ()
 finalizeAutoDeadLetter msg onAutoDeadLetter onAckFailure finalizeAction =
   (finalizeAction >> liftIO (onAutoDeadLetter msg))
-    `catchError` \_callStack err -> liftIO (onAckFailure msg err)
+    `catchError` \_callStack err -> do
+      liftIO $ onAckFailure msg err
+      throwError err
 
 -- | Stream of message batches from pgmq.
 -- Each element is a Vector of messages from a single poll.

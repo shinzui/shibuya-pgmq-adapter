@@ -10,15 +10,18 @@
 module Shibuya.Adapter.Pgmq.ChaosSpec (spec) where
 
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async (async, cancel)
-import Control.Monad (forM_)
+import Control.Concurrent.Async (async, cancel, concurrently_)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
+import Control.Exception qualified as Exception
+import Control.Monad (forM_, when)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int32)
 import Data.Text qualified as Text
 import Data.Vector qualified as Vector
-import Effectful (Eff, IOE, liftIO, runEff, (:>))
+import Effectful (Eff, IOE, Limit (..), Persistence (..), UnliftStrategy (..), liftIO, runEff, withEffToIO, (:>))
+import Effectful.Dispatch.Dynamic (interpret)
 import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Hasql.Decoders qualified as D
 import Hasql.Pool qualified as Pool
@@ -26,13 +29,17 @@ import Hasql.Session qualified as Session
 import Hasql.Statement qualified as Statement
 import Pgmq.Effectful (Pgmq, PgmqRuntimeError, runPgmq)
 import Pgmq.Effectful qualified as PgmqEff
+import Pgmq.Effectful.Effect qualified as PgmqEffect
 import Pgmq.Hasql.Encoders qualified as Encoders
 import Pgmq.Hasql.Sessions qualified as Sessions
 import Pgmq.Hasql.Statements.Types (ReadMessage (..), SendMessage (..), SendMessageWithHeaders (..))
-import Pgmq.Types (MessageBody (..), MessageHeaders (..), QueueName)
-import Shibuya.Adapter (Adapter)
+import Pgmq.Types (Message (..), MessageBody (..), MessageHeaders (..), QueueName, parseQueueName)
+import Shibuya.Adapter (Adapter (..))
 import Shibuya.Adapter.Pgmq
-  ( PgmqAdapterConfig (..),
+  ( PgmqAcknowledgementException,
+    PgmqAdapterConfig (..),
+    PgmqAdapterEnv (..),
+    PollRetryConfig (..),
     PollingConfig (..),
     PrefetchConfig (..),
     defaultConfig,
@@ -41,26 +48,31 @@ import Shibuya.Adapter.Pgmq
     mkPgmqAdapterEnv,
     pgmqAdapter,
   )
-import Shibuya.Adapter.Pgmq.Internal (mkIngested)
+import Shibuya.Adapter.Pgmq.Internal (mkAckHandle, mkIngested)
 import Shibuya.App
   ( AppConfig (..),
     ProcessorId (..),
     ShutdownConfig (..),
     SupervisionStrategy (..),
     defaultAppConfig,
+    defaultShutdownConfig,
+    getAppMaster,
     mkProcessor,
     runApp,
     stopAppGracefully,
+    waitApp,
   )
 import Shibuya.Core.Ack (AckDecision (..), DeadLetterCode, DeadLetterReason (..), HaltReason (..), mkDeadLetterCode)
 import Shibuya.Core.AckHandle (AckHandle (..))
 import Shibuya.Core.Ingested (Ingested (..))
 import Shibuya.Handler (Handler)
+import Shibuya.Internal.Runner.Master (getLifecycleSnapshot)
 import Shibuya.Telemetry.Effect (Tracing, runTracingNoop)
+import Streamly.Data.Stream qualified as Stream
 import System.Environment (lookupEnv)
 import System.Timeout (timeout)
 import Test.Hspec
-import TmpPostgres (TestFixture (..), runPgmqSession, withPgmqDb, withTestFixture)
+import TmpPostgres (TestFixture (..), runPgmqSession, withPgmqDb, withRestartablePgmqDb, withTestFixture)
 
 spec :: Spec
 spec = do
@@ -70,6 +82,30 @@ spec = do
       longHandlerSpec
       gracefulShutdownSpec
       prefetchSpec
+  describe "Database restart" $ do
+    it "reconnects and redelivers an unacknowledged message after its lease expires" $ do
+      result <- withRestartablePgmqDb $ \pool restartDatabase ->
+        withTestFixture pool $ \TestFixture {queueName} -> do
+          runPgmqSession pool $ do
+            _ <- Sessions.sendMessage $ SendMessage queueName (MessageBody (String "restart-redelivery")) (Just 0)
+            pure ()
+          leased <- runPgmqSession pool $ Sessions.readMessage $ ReadMessage queueName 1 (Just 1) Nothing
+          originalId <- case Vector.uncons leased of
+            Nothing -> expectationFailure "expected one leased message before restart" >> pure Nothing
+            Just (msg, _) -> pure $ Just msg.messageId
+
+          restartDatabase >>= \case
+            Left err -> expectationFailure $ "ephemeral PostgreSQL restart failed: " <> show err
+            Right () -> pure ()
+
+          threadDelay 1_500_000
+          redelivered <- runPgmqSession pool $ Sessions.readMessage $ ReadMessage queueName 30 (Just 1) Nothing
+          case (originalId, Vector.uncons redelivered) of
+            (Just expectedId, Just (msg, _)) -> msg.messageId `shouldBe` expectedId
+            _ -> expectationFailure "expected the same durable message after restart and lease expiry"
+      case result of
+        Left err -> expectationFailure $ "failed to start ephemeral PostgreSQL: " <> show err
+        Right () -> pure ()
 
 -- | Wrapper to run tests with a temporary database and fixture
 withTempDbFixture :: (TestFixture -> IO ()) -> IO ()
@@ -181,7 +217,7 @@ poisonMessageSpec = describe "Poison messages" $ do
           liftIO $ waitForProcessed processedRef 1 3000000
 
           -- Stop the app
-          let shutdownConfig = ShutdownConfig {drainTimeout = 5}
+          let shutdownConfig = defaultShutdownConfig {drainTimeout = 5}
           _ <- stopAppGracefully shutdownConfig appHandle
           pure ()
 
@@ -242,7 +278,7 @@ poisonMessageSpec = describe "Poison messages" $ do
         Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
         Right appHandle -> do
           liftIO $ waitForProcessed processedRef 1 3000000
-          _ <- stopAppGracefully ShutdownConfig {drainTimeout = 5} appHandle
+          _ <- stopAppGracefully defaultShutdownConfig {drainTimeout = 5} appHandle
           pure ()
 
     applicationInspection <- runPgmqSession pool $ inspectNextDlqPayload dlqName
@@ -340,7 +376,7 @@ poisonMessageSpec = describe "Poison messages" $ do
           liftIO $ waitForProcessed processedRef 1 3000000
 
           -- Stop the app
-          let shutdownConfig = ShutdownConfig {drainTimeout = 5}
+          let shutdownConfig = defaultShutdownConfig {drainTimeout = 5}
           _ <- stopAppGracefully shutdownConfig appHandle
           pure ()
 
@@ -429,6 +465,212 @@ poisonMessageSpec = describe "Poison messages" $ do
               conditional = Nothing
             }
     Vector.length sourceMsgs `shouldBe` 0
+
+  it "a discarded DLQ commit confirmation can be retried without creating a second copy" $ \TestFixture {pool, queueName, dlqName} -> do
+    runPgmqSession pool $ do
+      _ <-
+        Sessions.sendMessage $
+          SendMessage
+            { queueName = queueName,
+              messageBody = MessageBody (String "ambiguous-dlq-commit"),
+              delay = Just 0
+            }
+      pure ()
+
+    let config =
+          (defaultConfig queueName)
+            { visibilityTimeout = 5,
+              batchSize = 1,
+              deadLetterConfig = Just $ directDeadLetter dlqName True
+            }
+
+    runAdapterIO pool $ runTracingNoop $ do
+      msgs <-
+        PgmqEff.readMessage $
+          ReadMessage
+            { queueName = queueName,
+              delay = 30,
+              batchSize = Just 1,
+              conditional = Nothing
+            }
+      case Vector.uncons msgs of
+        Nothing -> liftIO $ expectationFailure "expected one source message"
+        Just (msg, _) -> do
+          let finalizeWithFreshHandle = do
+                ingestedResult <- mkIngested (mkPgmqAdapterEnv pool) config msg
+                case ingestedResult of
+                  Nothing -> liftIO $ expectationFailure "message should not auto-DLQ"
+                  Just Ingested {ack = AckHandle finalize} ->
+                    finalize (AckDeadLetter (PoisonPill "ambiguous commit"))
+
+          -- Treat the first successful return as a commit confirmation that the
+          -- caller never received: discard its in-memory handle and retry the
+          -- same durable delivery through a fresh handle.
+          finalizeWithFreshHandle
+          finalizeWithFreshHandle
+
+    dlqMsgs <-
+      runPgmqSession pool $
+        Sessions.readMessage $
+          ReadMessage
+            { queueName = dlqName,
+              delay = 30,
+              batchSize = Just 10,
+              conditional = Nothing
+            }
+    Vector.length dlqMsgs `shouldBe` 1
+
+    sourceMetrics <- runPgmqSession pool $ Sessions.queueMetrics queueName
+    sourceMetrics.queueLength `shouldBe` 0
+
+  it "concurrent finalization of one delivery converges on one durable DLQ move" $ \TestFixture {pool, queueName, dlqName} -> do
+    runPgmqSession pool $ do
+      _ <- Sessions.sendMessage $ SendMessage queueName (MessageBody (String "concurrent-dlq")) (Just 0)
+      pure ()
+
+    let config =
+          (defaultConfig queueName)
+            { deadLetterConfig = Just $ directDeadLetter dlqName True
+            }
+
+    runAdapterIO pool $ runTracingNoop $ do
+      msgs <- PgmqEff.readMessage $ ReadMessage queueName 30 (Just 1) Nothing
+      case Vector.uncons msgs of
+        Nothing -> liftIO $ expectationFailure "expected one source message"
+        Just (msg, _) -> do
+          ingestedResult <- mkIngested (mkPgmqAdapterEnv pool) config msg
+          case ingestedResult of
+            Nothing -> liftIO $ expectationFailure "message should not auto-DLQ"
+            Just Ingested {ack = AckHandle finalize} ->
+              withEffToIO (ConcUnlift Persistent Unlimited) $ \runInIO ->
+                concurrently_
+                  (runInIO $ finalize $ AckDeadLetter $ PoisonPill "first")
+                  (runInIO $ finalize $ AckDeadLetter $ PoisonPill "second")
+
+    dlqMetrics <- runPgmqSession pool $ Sessions.queueMetrics dlqName
+    dlqMetrics.queueLength `shouldBe` 1
+    sourceMetrics <- runPgmqSession pool $ Sessions.queueMetrics queueName
+    sourceMetrics.queueLength `shouldBe` 0
+
+  it "cancellation releases finalizer ownership so the same handle can retry" $ \TestFixture {pool, queueName, dlqName = _} -> do
+    runPgmqSession pool $ do
+      _ <- Sessions.sendMessage $ SendMessage queueName (MessageBody (String "cancelled-finalize")) (Just 0)
+      pure ()
+
+    msgs <- runPgmqSession pool $ Sessions.readMessage $ ReadMessage queueName 30 (Just 1) Nothing
+    case Vector.uncons msgs of
+      Nothing -> expectationFailure "expected one source message"
+      Just (msg, _) -> do
+        started <- newEmptyMVar
+        release <- newEmptyMVar
+        blockAttempt <- newIORef True
+        attempts <- newIORef (0 :: Int)
+        let config = defaultConfig queueName
+            runWithBlockingDelete ::
+              Eff '[Tracing, Pgmq, Error PgmqRuntimeError, IOE] a ->
+              IO (Either PgmqRuntimeError a)
+            runWithBlockingDelete action =
+              runEff
+                $ runErrorNoCallStack
+                $ interpret
+                  ( \_ -> \case
+                      PgmqEffect.DeleteMessage _ -> do
+                        shouldBlock <- liftIO $ atomicModifyIORef' blockAttempt (\b -> (False, b))
+                        liftIO $ atomicModifyIORef' attempts (\n -> (n + 1, ()))
+                        when shouldBlock $ liftIO $ putMVar started () >> takeMVar release
+                        pure True
+                      _ -> error "unexpected PGMQ operation in cancellation regression"
+                  )
+                $ runTracingNoop action
+
+        result <- runWithBlockingDelete $ do
+          AckHandle finalize <- mkAckHandle (mkPgmqAdapterEnv pool) config msg
+          withEffToIO (ConcUnlift Persistent Unlimited) $ \runInIO -> do
+            worker <- async $ runInIO $ finalize AckOk
+            takeMVar started
+            cancel worker
+            timeout 1_000_000 $ runInIO $ finalize AckOk
+
+        result `shouldBe` Right (Just ())
+        readIORef attempts `shouldReturn` 2
+
+  it "a failed DLQ move remains recoverable and reaches the core lifecycle" $ \TestFixture {pool, queueName, dlqName = _} -> do
+    runPgmqSession pool $ do
+      _ <- Sessions.sendMessage $ SendMessage queueName (MessageBody (String "failed-dlq-move")) (Just 0)
+      pure ()
+
+    failureCalls <- newIORef (0 :: Int)
+    let missingDlq = queueNameOrFail "missing_dlq_target"
+        config =
+          (defaultConfig queueName)
+            { deadLetterConfig = Just $ directDeadLetter missingDlq True,
+              ackRetry = PollRetryConfig 1 0 0
+            }
+        env =
+          (mkPgmqAdapterEnv pool)
+            { onAckFailure = \_ _ -> bump failureCalls
+            }
+        processorId = ProcessorId "pgmq-terminal-ack-failure"
+
+    lifecycle <- runAdapterIO pool $ runTracingNoop $ do
+      msgs <- PgmqEff.readMessage $ ReadMessage queueName 30 (Just 1) Nothing
+      case Vector.uncons msgs of
+        Nothing -> liftIO (expectationFailure "expected one source message") >> pure ""
+        Just (msg, _) -> do
+          ingestedResult <- mkIngested env config msg
+          case ingestedResult of
+            Nothing -> liftIO (expectationFailure "message should not auto-DLQ") >> pure ""
+            Just ingested -> do
+              let adapter = Adapter "pgmq:test-terminal-ack-failure" (Stream.fromList [ingested]) (pure ())
+                  processor = mkProcessor adapter (\_ -> pure $ AckDeadLetter $ PoisonPill "fail loudly")
+              appResult <- runApp defaultAppConfig [(processorId, processor)]
+              case appResult of
+                Left appError -> liftIO $ error $ "runApp failed: " <> show appError
+                Right appHandle -> do
+                  waitApp appHandle
+                  snapshot <- getLifecycleSnapshot (getAppMaster appHandle)
+                  pure $ show snapshot
+
+    lifecycle `shouldContain` "LifecycleFailed"
+    lifecycle `shouldContain` "pgmq-terminal-ack-failure"
+    readIORef failureCalls `shouldReturn` 4
+    sourceMetrics <- runPgmqSession pool $ Sessions.queueMetrics queueName
+    sourceMetrics.queueLength `shouldBe` 1
+
+  it "a failed automatic DLQ move calls the failure hook and remains visible" $ \TestFixture {pool, queueName, dlqName = _} -> do
+    runPgmqSession pool $ do
+      _ <- Sessions.sendMessage $ SendMessage queueName (MessageBody (String "failed-auto-dlq")) (Just 0)
+      pure ()
+
+    msgs <- runPgmqSession pool $ Sessions.readMessage $ ReadMessage queueName 30 (Just 1) Nothing
+    case Vector.uncons msgs of
+      Nothing -> expectationFailure "expected one source message"
+      Just (msg, _) -> do
+        failureCalls <- newIORef (0 :: Int)
+        autoCalls <- newIORef (0 :: Int)
+        let config =
+              (defaultConfig queueName)
+                { maxRetries = 0,
+                  deadLetterConfig = Just $ directDeadLetter (queueNameOrFail "missing_auto_dlq_target") True,
+                  ackRetry = PollRetryConfig 1 0 0
+                }
+            env =
+              (mkPgmqAdapterEnv pool)
+                { onAutoDeadLetter = \_ -> bump autoCalls,
+                  onAckFailure = \_ _ -> bump failureCalls
+                }
+            attempt = runAdapterIO pool $ runTracingNoop $ do
+              _ <- mkIngested env config msg
+              pure ()
+
+        outcome <- (Exception.try attempt :: IO (Either PgmqAcknowledgementException ()))
+        case outcome of
+          Left _ -> pure ()
+          Right () -> expectationFailure "expected automatic DLQ failure to be visible"
+        readIORef autoCalls `shouldReturn` 0
+        readIORef failureCalls `shouldReturn` 1
+        sourceMetrics <- runPgmqSession pool $ Sessions.queueMetrics queueName
+        sourceMetrics.queueLength `shouldBe` 1
 
   it "AckOk is idempotent after a successful finalize" $ \TestFixture {pool, queueName, dlqName = _} -> do
     runPgmqSession pool $ do
@@ -562,7 +804,7 @@ longHandlerSpec = describe "Long-running handlers" $ do
           liftIO $ waitForProcessed processedRef 1 5000000
 
           -- Stop the app
-          let shutdownConfig = ShutdownConfig {drainTimeout = 5}
+          let shutdownConfig = defaultShutdownConfig {drainTimeout = 5}
           _ <- stopAppGracefully shutdownConfig appHandle
           pure ()
 
@@ -610,7 +852,7 @@ gracefulShutdownSpec = describe "Graceful shutdown" $ do
         Left err -> liftIO $ expectationFailure ("Failed to start app: " <> show err) >> pure False
         Right appHandle -> do
           liftIO $ threadDelay 100000
-          stopAppGracefully ShutdownConfig {drainTimeout = 2} appHandle
+          stopAppGracefully defaultShutdownConfig {drainTimeout = 2} appHandle
 
     drained `shouldBe` True
 
@@ -650,7 +892,7 @@ gracefulShutdownSpec = describe "Graceful shutdown" $ do
           liftIO $ waitForProcessed processedRef 5 5000000
 
           -- Graceful shutdown
-          let shutdownConfig = ShutdownConfig {drainTimeout = 2}
+          let shutdownConfig = defaultShutdownConfig {drainTimeout = 2}
           _ <- stopAppGracefully shutdownConfig appHandle
           pure ()
 
@@ -705,7 +947,7 @@ gracefulShutdownSpec = describe "Graceful shutdown" $ do
               pure ()
 
           -- Shutdown quickly
-          let shutdownConfig = ShutdownConfig {drainTimeout = 1}
+          let shutdownConfig = defaultShutdownConfig {drainTimeout = 1}
           _ <- stopAppGracefully shutdownConfig appHandle
           pure ()
 
@@ -778,7 +1020,7 @@ prefetchSpec = describe "Prefetch" $ do
         Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
         Right appHandle -> do
           liftIO $ waitForProcessed processedRef total 20_000_000
-          let shutdownConfig = ShutdownConfig {drainTimeout = 5}
+          let shutdownConfig = defaultShutdownConfig {drainTimeout = 5}
           _ <- stopAppGracefully shutdownConfig appHandle
           pure ()
 
@@ -906,7 +1148,7 @@ prefetchSpec = describe "Prefetch" $ do
         Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
         Right appHandle -> do
           liftIO $ threadDelay 1_000_000 -- let the adapter read a few batches ahead
-          _ <- stopAppGracefully (ShutdownConfig {drainTimeout = 1}) appHandle
+          _ <- stopAppGracefully (defaultShutdownConfig {drainTimeout = 1}) appHandle
           pure ()
 
     processed <- readIORef processedRef
@@ -998,6 +1240,14 @@ countingHandler processedRef _ = do
   liftIO $ atomicModifyIORef' processedRef (\n -> (n + 1, ()))
   pure AckOk
 
+bump :: IORef Int -> IO ()
+bump ref = atomicModifyIORef' ref (\n -> (n + 1, ()))
+
+queueNameOrFail :: Text.Text -> QueueName
+queueNameOrFail raw = case parseQueueName raw of
+  Left err -> error $ "invalid test queue name: " <> show err
+  Right name -> name
+
 -- | Wait until the processed count reaches the target, with timeout.
 waitForProcessed :: IORef Int -> Int -> Int -> IO ()
 waitForProcessed ref target timeoutMicros = go 0
@@ -1064,7 +1314,7 @@ measureShutdownRelease pool q mprefetch = do
       Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
       Right appHandle -> do
         liftIO $ waitForProcessed processedRef 1 5_000_000
-        _ <- stopAppGracefully (ShutdownConfig {drainTimeout = 1}) appHandle
+        _ <- stopAppGracefully (defaultShutdownConfig {drainTimeout = 1}) appHandle
         pure ()
 
   processed <- readIORef processedRef

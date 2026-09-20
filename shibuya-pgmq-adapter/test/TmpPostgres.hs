@@ -5,6 +5,7 @@
 module TmpPostgres
   ( -- * Test Execution
     withPgmqDb,
+    withRestartablePgmqDb,
     withTestFixture,
 
     -- * Test Fixture
@@ -16,13 +17,16 @@ module TmpPostgres
 where
 
 import Control.Exception (bracket)
+import Control.Monad ((>=>))
+import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Time (secondsToDiffTime)
 import Data.Word (Word64)
 import Database.PostgreSQL.Migrate qualified as Migrate
-import EphemeralPg (StartError, connectionSettings, with)
+import EphemeralPg (StartError)
+import EphemeralPg qualified as Pg
 import Hasql.Connection.Settings qualified as Settings
 import Hasql.Pool qualified as Pool
 import Hasql.Pool.Config qualified as PoolConfig
@@ -45,8 +49,8 @@ data TestFixture = TestFixture
 -- This creates an ephemeral PostgreSQL instance, installs the pgmq schema,
 -- and then runs the provided action with a connection pool.
 withPgmqDb :: (Pool.Pool -> IO a) -> IO (Either StartError a)
-withPgmqDb action = with $ \db -> do
-  let connSettings = connectionSettings db
+withPgmqDb action = Pg.with $ \db -> do
+  let connSettings = Pg.connectionSettings db
 
   -- Install pgmq schema
   installPgmqSchema connSettings
@@ -56,6 +60,33 @@ withPgmqDb action = with $ \db -> do
     (createPool connSettings)
     Pool.release
     action
+
+-- | Run against an ephemeral database that the test may restart in place.
+-- The restart preserves the data directory, releases stale pooled connections,
+-- and lets the next pool use establish a fresh connection to the same socket.
+withRestartablePgmqDb ::
+  (Pool.Pool -> IO (Either StartError ()) -> IO a) ->
+  IO (Either StartError a)
+withRestartablePgmqDb action = Pg.with $ \initialDb ->
+  bracket
+    (newIORef initialDb)
+    (readIORef >=> Pg.stop)
+    $ \databaseRef -> do
+      let connSettings = Pg.connectionSettings initialDb
+      installPgmqSchema connSettings
+      bracket
+        (createPool connSettings)
+        Pool.release
+        $ \pool -> do
+          let restartDatabase = do
+                currentDb <- readIORef databaseRef
+                Pg.restart currentDb >>= \case
+                  Left err -> pure $ Left err
+                  Right restartedDb -> do
+                    writeIORef databaseRef restartedDb
+                    Pool.release pool
+                    pure $ Right ()
+          action pool restartDatabase
 
 -- | Run an action with a test fixture (pool + unique queue names).
 --
