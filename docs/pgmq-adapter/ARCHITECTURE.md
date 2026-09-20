@@ -238,7 +238,7 @@ AckDeadLetter reason -> archiveMessage (MessageQuery queueName msgId)
 
 **With DLQ:**
 
-Dead-lettering runs in a **single hasql transaction** (`deadLetterTransactionally`, `ReadCommitted`/`Write`) that atomically sends the DLQ copy and deletes the source row, so a message is never lost or duplicated across the two operations:
+Dead-lettering runs in a **single hasql transaction** (`deadLetterTransactionally`, `ReadCommitted`/`Write`). It deletes/claims the source row first and sends the DLQ copy only when that delete returns `True`. PostgreSQL rolls the delete back if the send fails. If a commit succeeds but its response is lost, retry observes the missing source row and emits nothing, so the move converges on one durable DLQ copy:
 
 ```haskell
 AckDeadLetter reason -> case config.deadLetterConfig of
@@ -248,6 +248,15 @@ AckDeadLetter reason -> case config.deadLetterConfig of
     deadLetterTransactionally env config dlqConfig msg reason
       (mergeDlqHeaders consumerHdrs msg.headers)
 ```
+
+The per-delivery `AckHandle` additionally serializes concurrent callbacks with
+exception-safe ownership. Success makes later calls no-ops; failure or
+cancellation leaves the handle retryable. After the configured adapter retry
+budget is exhausted, `onAckFailure` runs and the handle throws
+`PgmqAcknowledgementException` synchronously. Core can then retain
+`LifecycleFailed` even when ingestion has already stopped. Automatic DLQ
+failure follows the same visible route and calls `onAutoDeadLetter` only after
+the durable move succeeds.
 
 The target is selected from `dlqConfig.dlqTarget :: DeadLetterTarget`:
 

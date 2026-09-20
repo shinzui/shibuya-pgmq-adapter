@@ -196,6 +196,22 @@ each matching target queue, multiplying those costs by the fan-out count.
 
 When the original message has headers (e.g., `x-pgmq-group` for FIFO), the adapter preserves them on the DLQ message. This applies to both direct queue and topic-routed dead-lettering.
 
+## Failure and Retry Semantics
+
+The adapter claims the source row and writes the DLQ copy in one transaction.
+It writes only when the source delete succeeds. A send failure rolls the delete
+back, leaving the source message recoverable; retry after a committed response
+was lost sees that the source is already absent and does not create another
+copy.
+
+Acknowledgement operations have a bounded retry policy from `ackRetry`. When it
+is exhausted, `PgmqAdapterEnv.onAckFailure` runs and the finalizer throws
+`PgmqAcknowledgementException`. Applications may catch that public exception
+at their outer lifecycle boundary, while current Shibuya core records it as a
+failed processor lifecycle. Automatic dead-lettering invokes
+`onAutoDeadLetter` only after success; failure calls `onAckFailure` and remains
+visible to the caller.
+
 ## DeadLetterTarget Type
 
 The `DeadLetterTarget` sum type controls where dead-lettered messages are sent:

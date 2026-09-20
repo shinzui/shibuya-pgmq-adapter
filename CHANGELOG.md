@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Reliability
+
+- Dead-letter movement now claims the source row before producing the DLQ copy
+  in the same PostgreSQL transaction. A retry after an ambiguous successful
+  commit observes that the source is already absent and does not emit a second
+  DLQ row; a failed send rolls the claim back and leaves the source recoverable.
+- Acknowledgement handles serialize concurrent callers and release ownership
+  on cancellation. Completed duplicate calls are no-ops, while failed or
+  cancelled attempts remain retryable.
+- Exhausted acknowledgement errors call `PgmqAdapterEnv.onAckFailure` and throw
+  the public `PgmqAcknowledgementException` synchronously. Shibuya core can
+  therefore retain the delivery as `LifecycleFailed`, including after source
+  ingestion has ended. Automatic dead-letter failure is no longer swallowed
+  after invoking the failure hook.
+
+### Tests
+
+- Added real PostgreSQL coverage for discarded commit confirmation, concurrent
+  finalization, rollback/recoverability, automatic-DLQ failure, core lifecycle
+  visibility, pool reconnection after database restart, and lease-expiry
+  redelivery, plus deterministic cancellation and renewal-outage regressions.
+
 ## 0.16.0.0 — 2026-09-16
 
 ### Breaking Changes
