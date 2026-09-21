@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Other Changes
+
+- Accept `effectful-core` 2.7.1.1 and later in addition to the 2.6 family across
+  the library, tests, benchmark, and example. Releases 2.7.0.0 through 2.7.1.0
+  are excluded because upstream records a per-operation performance regression
+  for dynamically dispatched effects, including this adapter's `Pgmq` effect.
+
 ## 0.16.0.0 — 2026-09-16
 
 ### Breaking Changes
