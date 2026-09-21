@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.0.1 — 2026-09-21
+## 0.16.1.0 — 2026-09-21
 
 ### Reliability
 
@@ -29,6 +29,10 @@
 - Require `shibuya-core ^>=0.10.0.0` in the adapter and benchmark, and
   `shibuya-metrics ^>=0.10.0.0` in the example, for the coordinated lifecycle
   release candidate.
+- Accept `pg-migrate` 1.2 in test, example, and benchmark components; its core
+  package API is unchanged from 1.1, while its coordinated test-support family
+  moved to `ephemeral-pg` 0.3.
+- Make the live restart fixture emit and enforce a per-delivery identity ledger.
 - Accept `effectful-core` 2.7.1.1 and later in addition to the 2.6 family across
   the library, tests, benchmark, and example. Releases 2.7.0.0 through 2.7.1.0
   remain excluded.

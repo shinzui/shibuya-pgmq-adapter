@@ -52,7 +52,7 @@ library
     hs-opentelemetry-api ^>=1.0,
     hs-opentelemetry-otlp ^>=1.0,
     hs-opentelemetry-sdk ^>=1.0,
-    pg-migrate ^>=1.1,
+    pg-migrate >=1.1 && <1.3,
     pgmq-core ^>=0.6,
     pgmq-hasql ^>=0.6,
     pgmq-migration ^>=0.6,

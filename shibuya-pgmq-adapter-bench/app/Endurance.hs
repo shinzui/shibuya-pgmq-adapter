@@ -24,12 +24,16 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async, cancel, wait)
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVarIO)
 import Control.Exception qualified as Exception
-import Control.Monad (forever, unless)
-import Data.Aeson (Value, object, (.=))
+import Control.Monad (forever, unless, when)
+import Data.Aeson (Value, encode, object, withObject, (.:), (.=))
+import Data.Aeson.Types (parseMaybe)
 import Data.ByteString.Char8 qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
 import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
@@ -62,7 +66,9 @@ import Shibuya.App
     runApp,
     stopAppGracefully,
   )
-import Shibuya.Core.Ack (AckDecision (..))
+import Shibuya.Core.Ack (AckDecision (..), DeadLetterReason (..))
+import Shibuya.Core.Ingested (Message (..))
+import Shibuya.Core.Types (Envelope (..))
 import Shibuya.Handler (Handler)
 import Shibuya.Telemetry.Effect (runTracingNoop)
 import System.Environment (getEnv, lookupEnv)
@@ -81,6 +87,7 @@ data EnduranceConfig = EnduranceConfig
     messagesPerSecond :: !Int,
     sampleIntervalSecs :: !Int,
     outputCsv :: !FilePath,
+    outputLedger :: !FilePath,
     runId :: !String,
     restartAtSecs :: !Int,
     shutdownDrainSecs :: !Int,
@@ -95,6 +102,7 @@ loadConfig = do
   msgRate <- getEnvIntDefault "MESSAGES_PER_SECOND" 100
   sampleInterval <- getEnvIntDefault "SAMPLE_INTERVAL_SECS" 30
   csvPath <- getEnvDefault "OUTPUT_CSV" "endurance_metrics.csv"
+  ledgerPath <- getEnvDefault "OUTPUT_LEDGER" (csvPath <> ".ledger.json")
   now <- getCurrentTime
   configuredRunId <- lookupEnv "LIFECYCLE_RUN_ID"
   let selectedRunId = maybe (formatTime defaultTimeLocale "%Y%m%d%H%M%S" now) id configuredRunId
@@ -108,6 +116,7 @@ loadConfig = do
         messagesPerSecond = msgRate,
         sampleIntervalSecs = sampleInterval,
         outputCsv = csvPath,
+        outputLedger = ledgerPath,
         runId = selectedRunId,
         restartAtSecs = max 1 (min (duration - 1) restartAt),
         shutdownDrainSecs = shutdownDrain,
@@ -174,6 +183,13 @@ data TestResult = TestResult
   }
   deriving stock (Show)
 
+data DeliveryLedger = DeliveryLedger
+  { producedIds :: !(IORef (Set Int)),
+    processedIds :: !(IORef (Set Int)),
+    duplicateIds :: !(IORef (Set Int)),
+    malformedDeliveries :: !(IORef Int)
+  }
+
 checkCriteria :: Word64 -> Word64 -> Int -> Int -> Int -> TestResult
 checkCriteria initialMem finalMem produced processed failed =
   let memRatio :: Double
@@ -211,9 +227,10 @@ runProducer ::
   Int ->
   TVar Int ->
   IORef Int ->
+  DeliveryLedger ->
   TVar Bool ->
   IO ()
-runProducer pool queue msgsPerSec countVar failedRef stopVar = go 0
+runProducer pool queue msgsPerSec countVar failedRef ledger stopVar = go 0
   where
     delayMicros = 1_000_000 `div` max 1 msgsPerSec
 
@@ -231,7 +248,9 @@ runProducer pool queue msgsPerSec countVar failedRef stopVar = go 0
         result <- Pool.use pool $ Pgmq.sendMessage msg
         case result of
           Left _ -> atomicModifyIORef' failedRef (\n -> (n + 1, ()))
-          Right _ -> atomically $ modifyTVar' countVar (+ 1)
+          Right _ -> do
+            atomically $ modifyTVar' countVar (+ 1)
+            recordProduced ledger idx
         threadDelay delayMicros
         go (idx + 1)
 
@@ -239,10 +258,21 @@ runProducer pool queue msgsPerSec countVar failedRef stopVar = go 0
 -- Handler
 --------------------------------------------------------------------------------
 
-makeHandler :: (IOE :> es) => IORef Int -> IORef Int -> Handler es Value
-makeHandler successRef _failRef _ = do
-  liftIO $ atomicModifyIORef' successRef (\n -> (n + 1, ()))
-  pure AckOk
+makeHandler :: (IOE :> es) => IORef Int -> IORef Int -> DeliveryLedger -> Handler es Value
+makeHandler successRef failRef ledger message = do
+  let Message {envelope = Envelope {payload}} = message
+      sequenceNumber = parseMaybe (withObject "EP-45 payload" (.: "id")) payload
+  case sequenceNumber of
+    Nothing -> do
+      liftIO $ do
+        atomicModifyIORef' failRef (\count -> (count + 1, ()))
+        atomicModifyIORef' ledger.malformedDeliveries (\count -> (count + 1, ()))
+      pure $ AckDeadLetter (InvalidPayload "EP-45 ledger id missing")
+    Just value -> do
+      liftIO $ do
+        atomicModifyIORef' successRef (\count -> (count + 1, ()))
+        recordProcessed ledger value
+      pure AckOk
 
 --------------------------------------------------------------------------------
 -- Sampling
@@ -304,6 +334,7 @@ main = do
   putStrLn $ "  Target rate: " <> show config.messagesPerSecond <> " msg/s"
   putStrLn $ "  Sample interval: " <> show config.sampleIntervalSecs <> " seconds"
   putStrLn $ "  Output CSV: " <> config.outputCsv
+  putStrLn $ "  Output ledger: " <> config.outputLedger
   putStrLn $ "  Run ID: " <> config.runId
   putStrLn $ "  Restart at: " <> show config.restartAtSecs <> " seconds"
   putStrLn ""
@@ -346,6 +377,7 @@ runEnduranceTest config pool queueName = do
   producedVar <- newTVarIO (0 :: Int)
   processedRef <- newIORef (0 :: Int)
   failedRef <- newIORef (0 :: Int)
+  ledger <- newDeliveryLedger
   stopVar <- newTVarIO False
 
   (_, initialMem) <- getMemoryBytes
@@ -358,18 +390,18 @@ runEnduranceTest config pool queueName = do
     hPutStrLn csvHandle (Text.unpack csvHeader)
     hFlush csvHandle
 
-    producerAsync <- async $ runProducer pool queueName config.messagesPerSecond producedVar failedRef stopVar
+    producerAsync <- async $ runProducer pool queueName config.messagesPerSecond producedVar failedRef ledger stopVar
 
     samplerAsync <- async $ runSampler config pool queueName startTime producedVar processedRef failedRef csvHandle
 
     putStrLn $ "Running for " <> show config.durationSecs <> " seconds..."
-    runProcessorSegment config pool queueName processedRef failedRef $ do
+    runProcessorSegment config pool queueName processedRef failedRef ledger $ do
       threadDelay (config.restartAtSecs * 1_000_000)
       putStrLn "\nGraceful midpoint stop..."
 
     putStrLn "Restarting processor with the same durable queue..."
     let remainingSecs = config.durationSecs - config.restartAtSecs
-    runProcessorSegment config pool queueName processedRef failedRef $ do
+    runProcessorSegment config pool queueName processedRef failedRef ledger $ do
       threadDelay (remainingSecs * 1_000_000)
       putStrLn "\nStopping producer and draining after restart..."
       atomically $ modifyTVar' stopVar (const True)
@@ -391,8 +423,10 @@ runEnduranceTest config pool queueName = do
     produced <- readTVarIO producedVar
     processed <- readIORef processedRef
     failed <- readIORef failedRef
+    ledgerPassed <- writeDeliveryLedger config ledger
 
-    pure $ checkCriteria initialMem finalMem produced processed failed
+    let result = checkCriteria initialMem finalMem produced processed failed
+    pure $ if ledgerPassed then result else result {passed = False, errors = result.errors <> ["Per-delivery ledger did not reconcile"]}
 
 runProcessorSegment ::
   EnduranceConfig ->
@@ -400,9 +434,10 @@ runProcessorSegment ::
   QueueName ->
   IORef Int ->
   IORef Int ->
+  DeliveryLedger ->
   IO () ->
   IO ()
-runProcessorSegment config pool queueName processedRef failedRef action = do
+runProcessorSegment config pool queueName processedRef failedRef ledger action = do
   let adapterConfig = defaultConfig queueName
       adapterEnv = mkPgmqAdapterEnv pool
   eResult <- runEff $ runErrorNoCallStack @PgmqRuntimeError $ runPgmq pool $ runTracingNoop $ do
@@ -410,7 +445,7 @@ runProcessorSegment config pool queueName processedRef failedRef action = do
     adapter <- case adapterResult of
       Left err -> liftIO $ error $ "Invalid PGMQ adapter config: " <> show err
       Right value -> pure value
-    let handler = makeHandler processedRef failedRef
+    let handler = makeHandler processedRef failedRef ledger
         processor = mkProcessor adapter handler
     result <- runApp defaultAppConfig [(ProcessorId "endurance", processor)]
     case result of
@@ -427,6 +462,52 @@ runProcessorSegment config pool queueName processedRef failedRef action = do
   case eResult of
     Left err -> error $ "Pgmq error: " <> show err
     Right () -> pure ()
+
+newDeliveryLedger :: IO DeliveryLedger
+newDeliveryLedger =
+  DeliveryLedger
+    <$> newIORef Set.empty
+    <*> newIORef Set.empty
+    <*> newIORef Set.empty
+    <*> newIORef 0
+
+recordProduced :: DeliveryLedger -> Int -> IO ()
+recordProduced ledger value =
+  atomicModifyIORef' ledger.producedIds $ \values -> (Set.insert value values, ())
+
+recordProcessed :: DeliveryLedger -> Int -> IO ()
+recordProcessed ledger value = do
+  duplicate <- atomicModifyIORef' ledger.processedIds $ \values ->
+    (Set.insert value values, Set.member value values)
+  when duplicate $
+    atomicModifyIORef' ledger.duplicateIds $
+      \values -> (Set.insert value values, ())
+
+writeDeliveryLedger :: EnduranceConfig -> DeliveryLedger -> IO Bool
+writeDeliveryLedger config ledger = do
+  produced <- readIORef ledger.producedIds
+  processed <- readIORef ledger.processedIds
+  duplicates <- readIORef ledger.duplicateIds
+  malformed <- readIORef ledger.malformedDeliveries
+  let missing = produced `Set.difference` processed
+      unexpected = processed `Set.difference` produced
+      passed = Set.null missing && Set.null unexpected && Set.null duplicates && malformed == 0
+      artifact =
+        object
+          [ "schemaVersion" .= (1 :: Int),
+            "adapter" .= ("pgmq" :: String),
+            "runId" .= config.runId,
+            "status" .= if passed then ("pass" :: String) else "fail",
+            "producedIds" .= Set.toAscList produced,
+            "processedIds" .= Set.toAscList processed,
+            "duplicateIds" .= Set.toAscList duplicates,
+            "missingIds" .= Set.toAscList missing,
+            "unexpectedIds" .= Set.toAscList unexpected,
+            "malformedDeliveries" .= malformed
+          ]
+  LBS.writeFile config.outputLedger (encode artifact)
+  putStrLn $ "  Delivery ledger: " <> config.outputLedger <> " (" <> if passed then "pass)" else "fail)"
+  pure passed
 
 waitForDrain :: TVar Int -> IORef Int -> Int -> IO ()
 waitForDrain producedVar processedRef timeoutSecs = loop (timeoutSecs * 10)
