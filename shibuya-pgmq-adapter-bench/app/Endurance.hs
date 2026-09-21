@@ -24,7 +24,7 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async, cancel, wait)
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVarIO)
 import Control.Exception qualified as Exception
-import Control.Monad (forever, unless, when)
+import Control.Monad (forever, unless)
 import Data.Aeson (Value, encode, object, withObject, (.:), (.=))
 import Data.Aeson.Types (parseMaybe)
 import Data.ByteString.Char8 qualified as BS
@@ -73,7 +73,7 @@ import Shibuya.Handler (Handler)
 import Shibuya.Telemetry.Effect (runTracingNoop)
 import System.Environment (getEnv, lookupEnv)
 import System.Exit (exitFailure)
-import System.IO (Handle, IOMode (..), hFlush, hPutStrLn, withFile)
+import System.IO (Handle, IOMode (..), SeekMode (AbsoluteSeek), hFlush, hPutStrLn, hSeek, hSetFileSize, withFile)
 import System.Mem (performMajorGC)
 import Text.Read (readMaybe)
 
@@ -184,9 +184,10 @@ data TestResult = TestResult
   deriving stock (Show)
 
 data DeliveryLedger = DeliveryLedger
-  { producedIds :: !(IORef (Set Int)),
-    processedIds :: !(IORef (Set Int)),
-    duplicateIds :: !(IORef (Set Int)),
+  { producedHandle :: !Handle,
+    processedHandle :: !Handle,
+    producedPath :: !FilePath,
+    processedPath :: !FilePath,
     malformedDeliveries :: !(IORef Int)
   }
 
@@ -377,7 +378,6 @@ runEnduranceTest config pool queueName = do
   producedVar <- newTVarIO (0 :: Int)
   processedRef <- newIORef (0 :: Int)
   failedRef <- newIORef (0 :: Int)
-  ledger <- newDeliveryLedger
   stopVar <- newTVarIO False
 
   (_, initialMem) <- getMemoryBytes
@@ -386,47 +386,48 @@ runEnduranceTest config pool queueName = do
   putStrLn $ "Starting test at: " <> show startTime
   putStrLn ""
 
-  withFile config.outputCsv WriteMode $ \csvHandle -> do
-    hPutStrLn csvHandle (Text.unpack csvHeader)
-    hFlush csvHandle
+  withDeliveryLedger config $ \ledger ->
+    withFile config.outputCsv WriteMode $ \csvHandle -> do
+      hPutStrLn csvHandle (Text.unpack csvHeader)
+      hFlush csvHandle
 
-    producerAsync <- async $ runProducer pool queueName config.messagesPerSecond producedVar failedRef ledger stopVar
+      producerAsync <- async $ runProducer pool queueName config.messagesPerSecond producedVar failedRef ledger stopVar
 
-    samplerAsync <- async $ runSampler config pool queueName startTime producedVar processedRef failedRef csvHandle
+      samplerAsync <- async $ runSampler config pool queueName startTime producedVar processedRef failedRef csvHandle
 
-    putStrLn $ "Running for " <> show config.durationSecs <> " seconds..."
-    runProcessorSegment config pool queueName processedRef failedRef ledger $ do
-      threadDelay (config.restartAtSecs * 1_000_000)
-      putStrLn "\nGraceful midpoint stop..."
+      putStrLn $ "Running for " <> show config.durationSecs <> " seconds..."
+      runProcessorSegment config pool queueName processedRef failedRef ledger $ do
+        threadDelay (config.restartAtSecs * 1_000_000)
+        putStrLn "\nGraceful midpoint stop..."
 
-    putStrLn "Restarting processor with the same durable queue..."
-    let remainingSecs = config.durationSecs - config.restartAtSecs
-    runProcessorSegment config pool queueName processedRef failedRef ledger $ do
-      threadDelay (remainingSecs * 1_000_000)
-      putStrLn "\nStopping producer and draining after restart..."
-      atomically $ modifyTVar' stopVar (const True)
-      wait producerAsync
-      waitForDrain producedVar processedRef 30
-      waitForQueueDrain pool queueName 30
+      putStrLn "Restarting processor with the same durable queue..."
+      let remainingSecs = config.durationSecs - config.restartAtSecs
+      runProcessorSegment config pool queueName processedRef failedRef ledger $ do
+        threadDelay (remainingSecs * 1_000_000)
+        putStrLn "\nStopping producer and draining after restart..."
+        atomically $ modifyTVar' stopVar (const True)
+        wait producerAsync
+        waitForDrain producedVar processedRef 30
+        waitForQueueDrain pool queueName 30
 
-    cancel samplerAsync
-    finalSample <- sampleMetrics pool queueName startTime producedVar processedRef failedRef
-    hPutStrLn csvHandle (Text.unpack $ sampleToCsv finalSample)
-    hFlush csvHandle
+      cancel samplerAsync
+      finalSample <- sampleMetrics pool queueName startTime producedVar processedRef failedRef
+      hPutStrLn csvHandle (Text.unpack $ sampleToCsv finalSample)
+      hFlush csvHandle
 
-    putStrLn "Processor stopped"
+      putStrLn "Processor stopped"
 
-    -- Wait a bit for final processing
-    threadDelay 1_000_000
+      -- Wait a bit for final processing
+      threadDelay 1_000_000
 
-    (_, finalMem) <- getMemoryBytes
-    produced <- readTVarIO producedVar
-    processed <- readIORef processedRef
-    failed <- readIORef failedRef
-    ledgerPassed <- writeDeliveryLedger config ledger
+      (_, finalMem) <- getMemoryBytes
+      produced <- readTVarIO producedVar
+      processed <- readIORef processedRef
+      failed <- readIORef failedRef
+      ledgerPassed <- writeDeliveryLedger config ledger
 
-    let result = checkCriteria initialMem finalMem produced processed failed
-    pure $ if ledgerPassed then result else result {passed = False, errors = result.errors <> ["Per-delivery ledger did not reconcile"]}
+      let result = checkCriteria initialMem finalMem produced processed failed
+      pure $ if ledgerPassed then result else result {passed = False, errors = result.errors <> ["Per-delivery ledger did not reconcile"]}
 
 runProcessorSegment ::
   EnduranceConfig ->
@@ -463,32 +464,31 @@ runProcessorSegment config pool queueName processedRef failedRef ledger action =
     Left err -> error $ "Pgmq error: " <> show err
     Right () -> pure ()
 
-newDeliveryLedger :: IO DeliveryLedger
-newDeliveryLedger =
-  DeliveryLedger
-    <$> newIORef Set.empty
-    <*> newIORef Set.empty
-    <*> newIORef Set.empty
-    <*> newIORef 0
+withDeliveryLedger :: EnduranceConfig -> (DeliveryLedger -> IO a) -> IO a
+withDeliveryLedger config action =
+  let producedPath = config.outputLedger <> ".produced.ids"
+      processedPath = config.outputLedger <> ".processed.ids"
+   in withFile producedPath ReadWriteMode $ \producedHandle ->
+        withFile processedPath ReadWriteMode $ \processedHandle -> do
+          hSetFileSize producedHandle 0
+          hSetFileSize processedHandle 0
+          malformedDeliveries <- newIORef 0
+          action DeliveryLedger {producedHandle, processedHandle, producedPath, processedPath, malformedDeliveries}
 
 recordProduced :: DeliveryLedger -> Int -> IO ()
-recordProduced ledger value =
-  atomicModifyIORef' ledger.producedIds $ \values -> (Set.insert value values, ())
+recordProduced ledger value = hPutStrLn ledger.producedHandle (show value)
 
 recordProcessed :: DeliveryLedger -> Int -> IO ()
-recordProcessed ledger value = do
-  duplicate <- atomicModifyIORef' ledger.processedIds $ \values ->
-    (Set.insert value values, Set.member value values)
-  when duplicate $
-    atomicModifyIORef' ledger.duplicateIds $
-      \values -> (Set.insert value values, ())
+recordProcessed ledger value = hPutStrLn ledger.processedHandle (show value)
 
 writeDeliveryLedger :: EnduranceConfig -> DeliveryLedger -> IO Bool
 writeDeliveryLedger config ledger = do
-  produced <- readIORef ledger.producedIds
-  processed <- readIORef ledger.processedIds
-  duplicates <- readIORef ledger.duplicateIds
+  producedValues <- readIdentityHandle ledger.producedPath ledger.producedHandle
+  processedValues <- readIdentityHandle ledger.processedPath ledger.processedHandle
   malformed <- readIORef ledger.malformedDeliveries
+  let produced = Set.fromList producedValues
+      processed = Set.fromList processedValues
+      duplicates = duplicateValues processedValues
   let missing = produced `Set.difference` processed
       unexpected = processed `Set.difference` produced
       passed = Set.null missing && Set.null unexpected && Set.null duplicates && malformed == 0
@@ -508,6 +508,23 @@ writeDeliveryLedger config ledger = do
   LBS.writeFile config.outputLedger (encode artifact)
   putStrLn $ "  Delivery ledger: " <> config.outputLedger <> " (" <> if passed then "pass)" else "fail)"
   pure passed
+
+readIdentityHandle :: FilePath -> Handle -> IO [Int]
+readIdentityHandle path handle = do
+  hFlush handle
+  hSeek handle AbsoluteSeek 0
+  contents <- BS.hGetContents handle
+  traverse parseIdentity (filter (not . BS.null) (BS.lines contents))
+  where
+    parseIdentity raw =
+      maybe (ioError $ userError $ "Invalid delivery identity in " <> path) pure (readMaybe $ BS.unpack raw)
+
+duplicateValues :: [Int] -> Set Int
+duplicateValues = snd . foldl' step (Set.empty, Set.empty)
+  where
+    step (seen, duplicates) value
+      | Set.member value seen = (seen, Set.insert value duplicates)
+      | otherwise = (Set.insert value seen, duplicates)
 
 waitForDrain :: TVar Int -> IORef Int -> Int -> IO ()
 waitForDrain producedVar processedRef timeoutSecs = loop (timeoutSecs * 10)

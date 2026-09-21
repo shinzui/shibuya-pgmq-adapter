@@ -32,7 +32,9 @@
 - Accept `pg-migrate` 1.2 in test, example, and benchmark components; its core
   package API is unchanged from 1.1, while its coordinated test-support family
   moved to `ephemeral-pg` 0.3.
-- Make the live restart fixture emit and enforce a per-delivery identity ledger.
+- Make the live restart fixture stream identities externally before emitting
+  and enforcing its reconciled per-delivery ledger, so the ledger does not
+  create artificial retained-memory growth in the measured process.
 - Accept `effectful-core` 2.7.1.1 and later in addition to the 2.6 family across
   the library, tests, benchmark, and example. Releases 2.7.0.0 through 2.7.1.0
   remain excluded.

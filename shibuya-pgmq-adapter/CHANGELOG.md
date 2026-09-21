@@ -27,7 +27,8 @@
 - Require `shibuya-core ^>=0.10.0.0` across the adapter and benchmark for the
   coordinated lifecycle release candidate.
 - Accept `pg-migrate` 1.2 in test components and make the live restart fixture
-  fail on duplicate, missing, unexpected, or malformed delivery identities.
+  stream identities externally before failing on duplicate, missing,
+  unexpected, or malformed deliveries, avoiding ledger-induced heap growth.
 - Accept `effectful-core` 2.7.1.1 and later in addition to the 2.6 family across
   the library, tests, benchmark, and example. Releases 2.7.0.0 through 2.7.1.0
   are excluded because upstream records a per-operation performance regression
