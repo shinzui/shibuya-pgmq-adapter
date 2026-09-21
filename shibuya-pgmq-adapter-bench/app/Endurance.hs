@@ -8,9 +8,11 @@
 --   MESSAGES_PER_SECOND  - Target message rate (default: 100)
 --   SAMPLE_INTERVAL_SECS - Metrics sampling interval (default: 30)
 --   OUTPUT_CSV           - Path to output CSV file (default: endurance_metrics.csv)
+--   LIFECYCLE_RUN_ID     - Unique queue suffix (default: process timestamp)
+--   RESTART_AT_SECS      - Graceful stop/restart point (default: halfway)
 --
 -- Pass/Fail Criteria:
---   - Memory growth < 2x initial
+--   - Retained-memory trend passes EP-45's post-warmup analyzer
 --   - Failed messages < 1%
 --   - All produced messages processed
 --
@@ -19,12 +21,14 @@
 module Main (main) where
 
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async (async, cancel)
+import Control.Concurrent.Async (async, cancel, wait)
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVarIO)
+import Control.Exception qualified as Exception
 import Control.Monad (forever, unless)
 import Data.Aeson (Value, object, (.=))
 import Data.ByteString.Char8 qualified as BS
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import Data.Int (Int64)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -34,7 +38,7 @@ import Data.Word (Word64)
 import Database.PostgreSQL.Migrate qualified as Migrate
 import Effectful (IOE, liftIO, runEff, (:>))
 import Effectful.Error.Static (runErrorNoCallStack)
-import GHC.Stats (RTSStats (..), getRTSStats, getRTSStatsEnabled)
+import GHC.Stats (GCDetails (..), RTSStats (..), getRTSStats, getRTSStatsEnabled)
 import Hasql.Connection.Settings qualified as Settings
 import Hasql.Pool qualified as Pool
 import Hasql.Pool.Config qualified as PoolConfig
@@ -51,7 +55,7 @@ import Shibuya.Adapter.Pgmq
   )
 import Shibuya.App
   ( ProcessorId (..),
-    ShutdownConfig (drainTimeout),
+    ShutdownConfig (drainTimeout, totalShutdownTimeout),
     defaultAppConfig,
     defaultShutdownConfig,
     mkProcessor,
@@ -62,7 +66,9 @@ import Shibuya.Core.Ack (AckDecision (..))
 import Shibuya.Handler (Handler)
 import Shibuya.Telemetry.Effect (runTracingNoop)
 import System.Environment (getEnv, lookupEnv)
+import System.Exit (exitFailure)
 import System.IO (Handle, IOMode (..), hFlush, hPutStrLn, withFile)
+import System.Mem (performMajorGC)
 import Text.Read (readMaybe)
 
 --------------------------------------------------------------------------------
@@ -74,7 +80,11 @@ data EnduranceConfig = EnduranceConfig
     durationSecs :: !Int,
     messagesPerSecond :: !Int,
     sampleIntervalSecs :: !Int,
-    outputCsv :: !FilePath
+    outputCsv :: !FilePath,
+    runId :: !String,
+    restartAtSecs :: !Int,
+    shutdownDrainSecs :: !Int,
+    shutdownTotalSecs :: !Int
   }
   deriving stock (Show)
 
@@ -85,13 +95,23 @@ loadConfig = do
   msgRate <- getEnvIntDefault "MESSAGES_PER_SECOND" 100
   sampleInterval <- getEnvIntDefault "SAMPLE_INTERVAL_SECS" 30
   csvPath <- getEnvDefault "OUTPUT_CSV" "endurance_metrics.csv"
+  now <- getCurrentTime
+  configuredRunId <- lookupEnv "LIFECYCLE_RUN_ID"
+  let selectedRunId = maybe (formatTime defaultTimeLocale "%Y%m%d%H%M%S" now) id configuredRunId
+  restartAt <- getEnvIntDefault "RESTART_AT_SECS" (duration `div` 2)
+  shutdownDrain <- getEnvIntDefault "SHUTDOWN_DRAIN_SECS" 30
+  shutdownTotal <- getEnvIntDefault "SHUTDOWN_TOTAL_SECS" 60
   pure
     EnduranceConfig
       { connectionString = BS.pack connStr,
         durationSecs = duration,
         messagesPerSecond = msgRate,
         sampleIntervalSecs = sampleInterval,
-        outputCsv = csvPath
+        outputCsv = csvPath,
+        runId = selectedRunId,
+        restartAtSecs = max 1 (min (duration - 1) restartAt),
+        shutdownDrainSecs = shutdownDrain,
+        shutdownTotalSecs = shutdownTotal
       }
 
 getEnvDefault :: String -> String -> IO String
@@ -114,7 +134,9 @@ data Sample = Sample
     messagesProduced :: !Int,
     messagesProcessed :: !Int,
     messagesFailed :: !Int,
-    memoryBytes :: !Word64
+    queueDepth :: !Int64,
+    retainedBytes :: !Word64,
+    maxLiveBytes :: !Word64
   }
   deriving stock (Show)
 
@@ -127,11 +149,13 @@ sampleToCsv s =
       Text.pack $ show s.messagesProduced,
       Text.pack $ show s.messagesProcessed,
       Text.pack $ show s.messagesFailed,
-      Text.pack $ show s.memoryBytes
+      Text.pack $ show s.queueDepth,
+      Text.pack $ show s.retainedBytes,
+      Text.pack $ show s.maxLiveBytes
     ]
 
 csvHeader :: Text
-csvHeader = "timestamp,elapsed_secs,produced,processed,failed,memory_bytes"
+csvHeader = "timestamp,elapsed_secs,produced,processed,failed,queue_depth,retained_bytes,max_live_bytes"
 
 --------------------------------------------------------------------------------
 -- Pass/Fail Criteria
@@ -159,12 +183,9 @@ checkCriteria initialMem finalMem produced processed failed =
       processedRatio :: Double
       processedRatio = fromIntegral processed / max 1 (fromIntegral produced)
       errs =
-        [ "Memory grew " <> Text.pack (show memRatio) <> "x (limit: 2x)"
-        | memRatio > 2.0
+        [ "Failure rate " <> Text.pack (show (failRate * 100)) <> "% (limit: 1%)"
+        | failRate > 0.01
         ]
-          ++ [ "Failure rate " <> Text.pack (show (failRate * 100)) <> "% (limit: 1%)"
-             | failRate > 0.01
-             ]
           ++ [ "Only processed " <> Text.pack (show (processedRatio * 100)) <> "% of messages"
              | processedRatio < 0.95
              ]
@@ -189,9 +210,10 @@ runProducer ::
   QueueName ->
   Int ->
   TVar Int ->
+  IORef Int ->
   TVar Bool ->
   IO ()
-runProducer pool queue msgsPerSec countVar stopVar = go 0
+runProducer pool queue msgsPerSec countVar failedRef stopVar = go 0
   where
     delayMicros = 1_000_000 `div` max 1 msgsPerSec
 
@@ -208,7 +230,7 @@ runProducer pool queue msgsPerSec countVar stopVar = go 0
                 }
         result <- Pool.use pool $ Pgmq.sendMessage msg
         case result of
-          Left _ -> pure ()
+          Left _ -> atomicModifyIORef' failedRef (\n -> (n + 1, ()))
           Right _ -> atomically $ modifyTVar' countVar (+ 1)
         threadDelay delayMicros
         go (idx + 1)
@@ -226,27 +248,34 @@ makeHandler successRef _failRef _ = do
 -- Sampling
 --------------------------------------------------------------------------------
 
-getMemoryBytes :: IO Word64
+getMemoryBytes :: IO (Word64, Word64)
 getMemoryBytes = do
   enabled <- getRTSStatsEnabled
   if enabled
     then do
+      performMajorGC
       stats <- getRTSStats
-      pure $ max_live_bytes stats
-    else pure 0
+      pure (gcdetails_live_bytes stats.gc, max_live_bytes stats)
+    else pure (0, 0)
 
 sampleMetrics ::
+  Pool.Pool ->
+  QueueName ->
   UTCTime ->
   TVar Int ->
   IORef Int ->
   IORef Int ->
   IO Sample
-sampleMetrics startTime producedVar processedRef failedRef = do
+sampleMetrics pool queueName startTime producedVar processedRef failedRef = do
   now <- getCurrentTime
   produced <- readTVarIO producedVar
   processed <- readIORef processedRef
   failed <- readIORef failedRef
-  memBytes <- getMemoryBytes
+  (retainedBytes, maxLiveBytes) <- getMemoryBytes
+  metricsResult <- Pool.use pool $ Pgmq.queueMetrics queueName
+  depth <- case metricsResult of
+    Left err -> error $ "Queue metrics error: " <> show err
+    Right metrics -> pure metrics.queueLength
 
   pure
     Sample
@@ -255,7 +284,9 @@ sampleMetrics startTime producedVar processedRef failedRef = do
         messagesProduced = produced,
         messagesProcessed = processed,
         messagesFailed = failed,
-        memoryBytes = memBytes
+        queueDepth = depth,
+        retainedBytes = retainedBytes,
+        maxLiveBytes = maxLiveBytes
       }
 
 --------------------------------------------------------------------------------
@@ -273,25 +304,23 @@ main = do
   putStrLn $ "  Target rate: " <> show config.messagesPerSecond <> " msg/s"
   putStrLn $ "  Sample interval: " <> show config.sampleIntervalSecs <> " seconds"
   putStrLn $ "  Output CSV: " <> config.outputCsv
+  putStrLn $ "  Run ID: " <> config.runId
+  putStrLn $ "  Restart at: " <> show config.restartAtSecs <> " seconds"
   putStrLn ""
 
-  pool <- createPool config.connectionString
-  putStrLn "Connected to PostgreSQL"
-
-  installSchema config.connectionString
-  putStrLn "PGMQ schema installed"
-
-  let queueName = case parseQueueName "endurance_test" of
+  let queueNameText = Text.pack ("ep45_" <> filter validQueueChar config.runId)
+      queueName = case parseQueueName queueNameText of
         Left err -> error $ "Invalid queue name: " <> show err
         Right q -> q
-  createQueue pool queueName
-  putStrLn $ "Queue created: endurance_test"
-  putStrLn ""
-
-  result <- runEnduranceTest config pool queueName
-
-  dropQueue pool queueName
-  Pool.release pool
+  result <-
+    Exception.bracket (createPool config.connectionString) Pool.release $ \pool -> do
+      putStrLn "Connected to PostgreSQL"
+      installSchema config.connectionString
+      putStrLn "PGMQ schema installed"
+      Exception.bracket_
+        (createQueue pool queueName >> putStrLn ("Queue created: " <> Text.unpack queueNameText))
+        (dropQueue pool queueName)
+        (putStrLn "" >> runEnduranceTest config pool queueName)
 
   printResult result
 
@@ -300,6 +329,13 @@ main = do
     else do
       putStrLn "\n=== TEST FAILED ==="
       mapM_ (putStrLn . ("  - " <>) . Text.unpack) result.errors
+      exitFailure
+  where
+    validQueueChar c =
+      ('a' <= c && c <= 'z')
+        || ('A' <= c && c <= 'Z')
+        || ('0' <= c && c <= '9')
+        || c == '_'
 
 runEnduranceTest ::
   EnduranceConfig ->
@@ -312,7 +348,7 @@ runEnduranceTest config pool queueName = do
   failedRef <- newIORef (0 :: Int)
   stopVar <- newTVarIO False
 
-  initialMem <- getMemoryBytes
+  (_, initialMem) <- getMemoryBytes
   startTime <- getCurrentTime
   putStrLn $ "Initial memory: " <> show initialMem <> " bytes"
   putStrLn $ "Starting test at: " <> show startTime
@@ -322,65 +358,117 @@ runEnduranceTest config pool queueName = do
     hPutStrLn csvHandle (Text.unpack csvHeader)
     hFlush csvHandle
 
-    producerAsync <- async $ runProducer pool queueName config.messagesPerSecond producedVar stopVar
+    producerAsync <- async $ runProducer pool queueName config.messagesPerSecond producedVar failedRef stopVar
 
-    samplerAsync <- async $ runSampler config startTime producedVar processedRef failedRef csvHandle
+    samplerAsync <- async $ runSampler config pool queueName startTime producedVar processedRef failedRef csvHandle
 
-    let adapterConfig = defaultConfig queueName
-        adapterEnv = mkPgmqAdapterEnv pool
-    eResult <- runEff $ runErrorNoCallStack @PgmqRuntimeError $ runPgmq pool $ runTracingNoop $ do
-      adapterResult <- pgmqAdapter adapterEnv adapterConfig
-      adapter <- case adapterResult of
-        Left err -> liftIO $ error $ "Invalid PGMQ adapter config: " <> show err
-        Right adapter -> pure adapter
-      let handler = makeHandler processedRef failedRef
-          processor = mkProcessor adapter handler
+    putStrLn $ "Running for " <> show config.durationSecs <> " seconds..."
+    runProcessorSegment config pool queueName processedRef failedRef $ do
+      threadDelay (config.restartAtSecs * 1_000_000)
+      putStrLn "\nGraceful midpoint stop..."
 
-      result <- runApp defaultAppConfig [(ProcessorId "endurance", processor)]
-      case result of
-        Left err -> liftIO $ error $ "Failed to start app: " <> show err
-        Right appHandle -> do
-          liftIO $ do
-            putStrLn $ "Running for " <> show config.durationSecs <> " seconds..."
-            threadDelay (config.durationSecs * 1_000_000)
+    putStrLn "Restarting processor with the same durable queue..."
+    let remainingSecs = config.durationSecs - config.restartAtSecs
+    runProcessorSegment config pool queueName processedRef failedRef $ do
+      threadDelay (remainingSecs * 1_000_000)
+      putStrLn "\nStopping producer and draining after restart..."
+      atomically $ modifyTVar' stopVar (const True)
+      wait producerAsync
+      waitForDrain producedVar processedRef 30
+      waitForQueueDrain pool queueName 30
 
-            putStrLn "\nStopping..."
-            atomically $ modifyTVar' stopVar (const True)
-
-            cancel producerAsync
-            cancel samplerAsync
-
-          let shutdownConfig = defaultShutdownConfig {drainTimeout = 30}
-          _ <- stopAppGracefully shutdownConfig appHandle
-          pure ()
-
-    case eResult of
-      Left err -> error $ "Pgmq error: " <> show err
-      Right _ -> pure ()
+    cancel samplerAsync
+    finalSample <- sampleMetrics pool queueName startTime producedVar processedRef failedRef
+    hPutStrLn csvHandle (Text.unpack $ sampleToCsv finalSample)
+    hFlush csvHandle
 
     putStrLn "Processor stopped"
 
     -- Wait a bit for final processing
     threadDelay 1_000_000
 
-    finalMem <- getMemoryBytes
+    (_, finalMem) <- getMemoryBytes
     produced <- readTVarIO producedVar
     processed <- readIORef processedRef
     failed <- readIORef failedRef
 
     pure $ checkCriteria initialMem finalMem produced processed failed
 
+runProcessorSegment ::
+  EnduranceConfig ->
+  Pool.Pool ->
+  QueueName ->
+  IORef Int ->
+  IORef Int ->
+  IO () ->
+  IO ()
+runProcessorSegment config pool queueName processedRef failedRef action = do
+  let adapterConfig = defaultConfig queueName
+      adapterEnv = mkPgmqAdapterEnv pool
+  eResult <- runEff $ runErrorNoCallStack @PgmqRuntimeError $ runPgmq pool $ runTracingNoop $ do
+    adapterResult <- pgmqAdapter adapterEnv adapterConfig
+    adapter <- case adapterResult of
+      Left err -> liftIO $ error $ "Invalid PGMQ adapter config: " <> show err
+      Right value -> pure value
+    let handler = makeHandler processedRef failedRef
+        processor = mkProcessor adapter handler
+    result <- runApp defaultAppConfig [(ProcessorId "endurance", processor)]
+    case result of
+      Left err -> liftIO $ error $ "Failed to start app: " <> show err
+      Right appHandle -> do
+        liftIO action
+        let shutdownConfig =
+              defaultShutdownConfig
+                { drainTimeout = fromIntegral config.shutdownDrainSecs,
+                  totalShutdownTimeout = fromIntegral config.shutdownTotalSecs
+                }
+        drained <- stopAppGracefully shutdownConfig appHandle
+        unless drained $ liftIO $ error "Shibuya application required forced shutdown"
+  case eResult of
+    Left err -> error $ "Pgmq error: " <> show err
+    Right () -> pure ()
+
+waitForDrain :: TVar Int -> IORef Int -> Int -> IO ()
+waitForDrain producedVar processedRef timeoutSecs = loop (timeoutSecs * 10)
+  where
+    loop remaining = do
+      produced <- readTVarIO producedVar
+      processed <- readIORef processedRef
+      if processed >= produced
+        then pure ()
+        else
+          if remaining > 0
+            then threadDelay 100_000 >> loop (remaining - 1)
+            else error $ "Timed out draining produced messages: produced=" <> show produced <> " processed=" <> show processed
+
+waitForQueueDrain :: Pool.Pool -> QueueName -> Int -> IO ()
+waitForQueueDrain pool queueName timeoutSecs = loop (timeoutSecs * 10)
+  where
+    loop remaining = do
+      metricsResult <- Pool.use pool $ Pgmq.queueMetrics queueName
+      depth <- case metricsResult of
+        Left err -> error $ "Queue metrics error: " <> show err
+        Right metrics -> pure metrics.queueLength
+      if depth <= 0
+        then pure ()
+        else
+          if remaining > 0
+            then threadDelay 100_000 >> loop (remaining - 1)
+            else error $ "Timed out draining PGMQ queue: depth=" <> show depth
+
 runSampler ::
   EnduranceConfig ->
+  Pool.Pool ->
+  QueueName ->
   UTCTime ->
   TVar Int ->
   IORef Int ->
   IORef Int ->
   Handle ->
   IO ()
-runSampler config startTime producedVar processedRef failedRef csvHandle = forever $ do
+runSampler config pool queueName startTime producedVar processedRef failedRef csvHandle = forever $ do
   threadDelay (config.sampleIntervalSecs * 1_000_000)
-  sample <- sampleMetrics startTime producedVar processedRef failedRef
+  sample <- sampleMetrics pool queueName startTime producedVar processedRef failedRef
   let csvLine = sampleToCsv sample
   hPutStrLn csvHandle (Text.unpack csvLine)
   hFlush csvHandle
@@ -393,8 +481,12 @@ runSampler config startTime producedVar processedRef failedRef csvHandle = forev
       <> show sample.messagesProcessed
       <> " failed="
       <> show sample.messagesFailed
-      <> " mem="
-      <> show (sample.memoryBytes `div` 1024 `div` 1024)
+      <> " queue="
+      <> show sample.queueDepth
+      <> " retained="
+      <> show (sample.retainedBytes `div` 1024 `div` 1024)
+      <> "MB max-live="
+      <> show (sample.maxLiveBytes `div` 1024 `div` 1024)
       <> "MB"
 
 printResult :: TestResult -> IO ()
