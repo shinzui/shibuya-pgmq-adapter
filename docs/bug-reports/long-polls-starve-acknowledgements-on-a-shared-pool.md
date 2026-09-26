@@ -13,11 +13,12 @@ severity: degraded
 origin: mori://shinzui/keiro-runtime-kenshou
 affects: mori://shinzui/shibuya-pgmq-adapter/packages/shibuya-pgmq-adapter
 capability: mori://shinzui/shibuya-pgmq-adapter/okf/capabilities/concepts/CAP-1
-affectedVersion: "0.16.0.0"
+affectedVersion: "0.16.1.0"
 environment: >-
-  Historical adapter 0.16.0.0 with Shibuya core 0.9.0.3 on PostgreSQL 17 and
-  18, and the pinned remediation adapter checkout on PostgreSQL 18. Two
-  processors use LongPolling 5 100 and share a Hasql pool of size two.
+  Historical adapter 0.16.0.0 with Shibuya core 0.9.0.3 and current Hackage
+  adapter 0.16.1.0 with Shibuya core 0.10.0.0 on PostgreSQL 17 and 18; also the
+  pinned remediation adapter checkout on PostgreSQL 18. Two processors use
+  LongPolling 5 100 and share a Hasql pool of size two.
 observed: >-
   Both handlers ran once, but after 25 seconds both source queues still held one
   row, the dead-letter queue had no row, and PostgreSQL reported two active
@@ -62,9 +63,16 @@ The SQL oracle uses the separate producer pool, so its reads do not compete
 for the consumer pool. In the PostgreSQL 18 run, the pre-shutdown facts are
 source rows 1 and 1, dead-letter rows 0, and active long polls 2. The handler
 counts are 1 and 1, and `onAckFailure` is 0. After shutdown the source rows are
-0 and 0 and the dead-letter rows are 1. No message loss was observed. Current
-Hackage adapter 0.16.1.0 has compiled and passed package tests in the external
-suite; this live reproduction has not yet run against it.
+0 and 0 and the dead-letter rows are 1. No message loss was observed.
+
+The isolated Hackage adapter 0.16.1.0 package lane passed 33 package examples,
+then executed the same scenario body on PostgreSQL 17 and 18 through
+`mori://shinzui/keiro-runtime-kenshou` at
+`kenshou-shibuya/test/Main.hs` (artifact-level URI pending) with
+`--pgmq-live-probe`. Both live runs reported only `acknowledgement-deadline`,
+with handler calls 1 and 1, pre-shutdown source rows 1 and 1, DLQ rows 0, two
+active long polls, and post-shutdown source rows 0 and 0 with DLQ rows 1. This
+focused package-lane probe does not produce a sealed full-CLI run result.
 
 The two active long polls suggest connection occupancy is involved, but the
 probe does not isolate the scheduling or pool-acquisition mechanism. A fix
