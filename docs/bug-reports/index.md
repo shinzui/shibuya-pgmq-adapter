@@ -8,4 +8,6 @@ okf_version: "0.2"
 
 # Bug Report
 
-- [Long polls can starve acknowledgements on a shared pool](long-polls-starve-acknowledgements-on-a-shared-pool.md) - Two long-polling processors using a two-connection pool handle their messages but leave both acknowledgements pending until shutdown.
+- [Exhausted acknowledgement skips the failure hook](exhausted-acknowledgement-skips-failure-hook.md) - Adapter 0.16.0.0 propagates a permanent acknowledgement failure to the application but does not invoke PgmqAdapterEnv.onAckFailure for that delivery.
+- [Long polls can starve acknowledgements on a shared pool](long-polls-starve-acknowledgements-on-a-shared-pool.md) - Two long-polling processors sharing a two-connection pool run their handlers but defer AckOk and transactional dead-letter acknowledgement until shutdown.
+- [Retried dead-letter move can duplicate a copy](retried-dead-letter-move-can-duplicate-a-copy.md) - Adapter 0.16.0.0 sends a DLQ copy before deleting the source row in one transaction, so retrying after an ambiguous successful commit can send a second copy even though the source is already absent.
