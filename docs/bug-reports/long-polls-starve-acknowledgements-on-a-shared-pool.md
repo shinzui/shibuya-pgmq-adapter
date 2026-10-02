@@ -5,8 +5,8 @@ description: >-
   Two long-polling processors sharing a two-connection pool run their handlers but
   defer AckOk and transactional dead-letter acknowledgement until shutdown.
 generated:
-  by: openai/codex
-  at: "2026-09-26T02:05:00Z"
+  by: process:claude-code
+  at: "2026-09-30T20:54:15Z"
 bugId: BUG-1
 status: reported
 severity: degraded
@@ -78,3 +78,48 @@ The two active long polls suggest connection occupancy is involved, but the
 probe does not isolate the scheduling or pool-acquisition mechanism. A fix
 needs a live regression that preserves acknowledgement progress while both
 long polls are active.
+
+## Root cause
+
+The keiro repository (`mori://shinzui/keiro`) isolated the mechanism while tracing its
+own reports `mori://shinzui/keiro/okf/bug-reports/concepts/BUG-6` (six long-polling
+processors stall on a three-connection pool) and
+`mori://shinzui/keiro/okf/bug-reports/concepts/BUG-4` in
+`mori://shinzui/keiro/plans/300-poll-pgmq-client-side-for-long-poll-job-workers-to-fix-bug-4-and-bug-6`.
+`LongPolling maxSec intervalMs` makes `pgmqChunks` in
+`shibuya-pgmq-adapter/src/Shibuya/Adapter/Pgmq/Internal.hs` call `readWithPoll` (or a
+grouped `*WithPoll` variant), which is one `pgmq.read_with_poll` statement that loops on
+the PostgreSQL server for up to `maxSec` seconds and holds its pool connection for the
+whole call. Every `Pgmq` operation is a separate `Hasql.Pool.use`, so during that call
+the connection is unavailable to anything else. Shibuya's supervised runner
+(`mori://shinzui/shibuya` at `shibuya-core/src/Shibuya/Internal/Runner/Supervised.hs`,
+`runIngesterAndProcessor`) polls on an ingester thread that issues the next read as soon
+as it has handed a message to the inbox, so a processor whose handler is running still
+holds a connection inside a server-side loop. With N long-polling processors on a pool of
+N connections every connection is pinned; `AckOk`'s `deleteMessage`, the
+`deadLetterTransactionally` transaction, and any handler database work on the same pool
+wait in `Hasql.Pool.use` until a loop returns. hasql-pool's `use` (`mori://hasql/hasql` at
+`hasql-pool/src/library/exposed/Hasql/Pool.hs`) wakes every STM waiter at once with no
+first-come-first-served order, and the ingester that just returned a connection asks for
+it again immediately, so the acknowledgement usually loses the race and eventually hits the
+acquisition timeout; `pgmq-effectful` classifies that as transient and the handle retries
+into the same contention. Acknowledgements complete at shutdown because
+`Adapter.shutdown` stops the ingesters and the connections finally drain. keiro's
+six-processor arm (Kenshou run `01a0d52d-8a1e-7070-be94-b20e771f6650`, worker control
+log) shows the same shape with handler work instead of an acknowledgement: one delivery,
+then no effect for thirty seconds while three backends sat in `read_with_poll`.
+
+## Recommended remedy
+
+Implement `LongPolling` in the client process and stop issuing `read_with_poll` and its
+grouped variants; see the remedy section of
+[BUG-4](long-poll-outlives-a-killed-client-and-consumes-a-read-attempt.md), which the same
+server-side loop causes. A client-side loop that reads once, sleeps `pollIntervalMs`, and
+gives up after `maxPollSeconds` performs the same one `UPDATE` per interval as the server
+loop, keeps `PollingConfig` unchanged, and never holds a connection between reads, so a
+two-connection pool serves two long-polling processors and their acknowledgements. A
+regression for this report is the Kenshou schedule in one test: two `LongPolling 5 100`
+processors on a two-connection pool, one message on each queue, and both acknowledgements
+(source rows 0, dead-letter row 1) observed within a few seconds while the application is
+still running. Enlarging the pool only moves the threshold and is not a fix.
+
