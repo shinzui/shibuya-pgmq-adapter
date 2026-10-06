@@ -107,7 +107,7 @@ test-suite shibuya-pgmq-adapter-test
     base ^>=4.21.0.0,
     bytestring,
     effectful-core (>=2.6.1 && <2.7) || (>=2.7.1.1 && <2.8),
-    ephemeral-pg,
+    ephemeral-pg >=0.3.1 && <0.4, directory, unix,
     hasql ^>=1.10,
     hasql-pool ^>=1.4,
     hasql-transaction ^>=1.2,

@@ -20,6 +20,7 @@ import Control.Exception (bracket)
 import Control.Monad ((>=>))
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty ((:|)))
+import Data.Monoid qualified as EphemeralMonoid
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Time (secondsToDiffTime)
@@ -35,6 +36,8 @@ import Numeric (showHex)
 import Pgmq.Hasql.Sessions qualified as Pgmq
 import Pgmq.Migration qualified as Migration
 import Pgmq.Types (QueueName, parseQueueName)
+import System.Directory qualified as EphemeralDirectory
+import System.Posix.User qualified as EphemeralUser
 import System.Random (randomIO)
 
 -- | Test fixture containing pool and queue names for a test
@@ -49,7 +52,7 @@ data TestFixture = TestFixture
 -- This creates an ephemeral PostgreSQL instance, installs the pgmq schema,
 -- and then runs the provided action with a connection pool.
 withPgmqDb :: (Pool.Pool -> IO a) -> IO (Either StartError a)
-withPgmqDb action = Pg.with $ \db -> do
+withPgmqDb action = withEphemeralPg $ \db -> do
   let connSettings = Pg.connectionSettings db
 
   -- Install pgmq schema
@@ -67,7 +70,7 @@ withPgmqDb action = Pg.with $ \db -> do
 withRestartablePgmqDb ::
   (Pool.Pool -> IO (Either StartError ()) -> IO a) ->
   IO (Either StartError a)
-withRestartablePgmqDb action = Pg.with $ \initialDb ->
+withRestartablePgmqDb action = withEphemeralPg $ \initialDb ->
   bracket
     (newIORef initialDb)
     (readIORef >=> Pg.stop)
@@ -161,3 +164,13 @@ createPool connSettings = do
             PoolConfig.staticConnectionSettings connSettings
           ]
   Pool.acquire poolConfig
+
+-- | Stable per-user root lets the next invocation reap abandoned clusters.
+-- See mori://shinzui/ephemeral-pg/docs/guides (temporary-roots-and-stale-cleanup.md; artifact URI pending).
+withEphemeralPg :: (Pg.Database -> IO a) -> IO (Either Pg.StartError a)
+withEphemeralPg action = do
+  uid <- EphemeralUser.getEffectiveUserID
+  let root = "/tmp/ephpg-shibuya-pgmq-adapter-" <> show uid
+  EphemeralDirectory.createDirectoryIfMissing True root
+  let config = Pg.defaultConfig {Pg.temporaryRoot = EphemeralMonoid.Last (Just root)}
+  Pg.withConfig config action
