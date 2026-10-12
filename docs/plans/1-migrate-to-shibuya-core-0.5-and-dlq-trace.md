@@ -5,6 +5,13 @@ title: "Migrate to shibuya-core 0.5.0.0 and propagate consumer trace context on 
 kind: exec-plan
 created_at: 2026-05-05T23:08:17Z
 intention: "intention_01kh0akd82ekat0be54p2f72kv"
+provenance:
+  revisions:
+    - model: "gpt-6-astra"
+      harness: "codex-cli"
+      at: 2026-10-12T23:33:00Z
+      mode: "update"
+      note: "Repoint the audit citation to the consolidated canonical Shibuya plan 9."
 ---
 
 
@@ -39,7 +46,7 @@ this adapter needs to track:
     identified as the right fix for this adapter's
     "DLQ writes carry the original producer's traceparent, not the
     failing consumer's" gap (see
-    `shinzui/shibuya/docs/plans/9-otel-audit-findings.md`).
+    `mori://shinzui/shibuya/plans/9-audit-and-improve-opentelemetry-api`).
 
 Today, when a handler in this adapter returns
 `AckDeadLetter <reason>`, the `mkAckHandle` body in
@@ -747,3 +754,6 @@ Revision history:
 -   2026-05-05: Closed M4. `shibuya-pgmq-adapter 0.5.0.0`
     published to Hackage; tag `v0.5.0.0` and GitHub release
     pushed; Outcomes & Retrospective filled in.
+
+-   2026-10-12: Repointed the audit finding citation to the consolidated canonical
+    parent plan; the duplicate findings document was merged into that plan.
