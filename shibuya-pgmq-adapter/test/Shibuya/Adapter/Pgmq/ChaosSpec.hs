@@ -1236,7 +1236,7 @@ prefetchSpec = describe "Prefetch" $ do
       adapter <- requireAdapter pool config
       let handler = slowHandler processedRef 10_000_000
           processor = mkProcessor adapter handler
-      appResult <- runApp (AppConfig {strategy = IgnoreFailures, inboxSize = 2}) [(ProcessorId "noloss-test", processor)]
+      appResult <- runApp (defaultAppConfig {strategy = IgnoreFailures, inboxSize = 2}) [(ProcessorId "noloss-test", processor)]
       case appResult of
         Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
         Right appHandle -> do
@@ -1402,7 +1402,7 @@ measureShutdownRelease pool q mprefetch = do
     adapter <- requireAdapter pool config
     let handler = slowHandler processedRef 400000 -- 0.4s per message
         processor = mkProcessor adapter handler
-    appResult <- runApp (AppConfig {strategy = IgnoreFailures, inboxSize = 2}) [(ProcessorId "shutdown-measure", processor)]
+    appResult <- runApp (defaultAppConfig {strategy = IgnoreFailures, inboxSize = 2}) [(ProcessorId "shutdown-measure", processor)]
     case appResult of
       Left err -> liftIO $ expectationFailure $ "Failed to start app: " <> show err
       Right appHandle -> do
