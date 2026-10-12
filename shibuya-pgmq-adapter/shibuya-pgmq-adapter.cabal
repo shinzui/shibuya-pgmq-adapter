@@ -112,6 +112,8 @@ test-suite shibuya-pgmq-adapter-test
     hasql-pool ^>=1.4,
     hasql-transaction ^>=1.2,
     hspec ^>=2.11,
+    hs-opentelemetry-api ^>=1.0,
+    hs-opentelemetry-exporter-in-memory ^>=1.0,
     pg-migrate >=1.1 && <1.3,
     pgmq-core ^>=0.6,
     pgmq-effectful ^>=0.6,

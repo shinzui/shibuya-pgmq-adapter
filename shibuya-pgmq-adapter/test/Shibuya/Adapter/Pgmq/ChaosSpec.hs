@@ -15,10 +15,12 @@ import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception qualified as Exception
 import Control.Monad (forM_, when)
 import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int32)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as Text
 import Data.Vector qualified as Vector
 import Effectful (Eff, IOE, Limit (..), Persistence (..), UnliftStrategy (..), liftIO, runEff, withEffToIO, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
@@ -27,13 +29,17 @@ import Hasql.Decoders qualified as D
 import Hasql.Pool qualified as Pool
 import Hasql.Session qualified as Session
 import Hasql.Statement qualified as Statement
+import OpenTelemetry.Attributes (emptyAttributes)
+import OpenTelemetry.Exporter.InMemory (inMemoryListExporter)
+import OpenTelemetry.Trace.Core qualified as OTel
+import OpenTelemetry.Trace.Id.Generator (IdGenerator (..))
 import Pgmq.Effectful (Pgmq, PgmqRuntimeError, runPgmq)
 import Pgmq.Effectful qualified as PgmqEff
 import Pgmq.Effectful.Effect qualified as PgmqEffect
 import Pgmq.Hasql.Encoders qualified as Encoders
 import Pgmq.Hasql.Sessions qualified as Sessions
-import Pgmq.Hasql.Statements.Types (ReadMessage (..), SendMessage (..), SendMessageWithHeaders (..))
-import Pgmq.Types (Message (..), MessageBody (..), MessageHeaders (..), QueueName, parseQueueName)
+import Pgmq.Hasql.Statements.Types (BindTopic (..), ReadMessage (..), SendMessage (..), SendMessageWithHeaders (..))
+import Pgmq.Types (Message (..), MessageBody (..), MessageHeaders (..), QueueName, parseQueueName, parseRoutingKey, parseTopicPattern)
 import Shibuya.Adapter (Adapter (..))
 import Shibuya.Adapter.Pgmq
   ( PgmqAcknowledgementException,
@@ -47,6 +53,7 @@ import Shibuya.Adapter.Pgmq
     directDeadLetter,
     mkPgmqAdapterEnv,
     pgmqAdapter,
+    topicDeadLetter,
   )
 import Shibuya.Adapter.Pgmq.Internal (mkAckHandle, mkIngested)
 import Shibuya.App
@@ -67,7 +74,8 @@ import Shibuya.Core.AckHandle (AckHandle (..))
 import Shibuya.Core.Ingested (Ingested (..))
 import Shibuya.Handler (Handler)
 import Shibuya.Internal.Runner.Master (getLifecycleSnapshot)
-import Shibuya.Telemetry.Effect (Tracing, runTracingNoop)
+import Shibuya.Telemetry.Effect (Tracing, runTracing, runTracingNoop)
+import Shibuya.Telemetry.Propagation (extractTraceContext)
 import Streamly.Data.Stream qualified as Stream
 import System.Environment (lookupEnv)
 import System.Timeout (timeout)
@@ -333,6 +341,72 @@ poisonMessageSpec = describe "Poison messages" $ do
               conditional = Nothing
             }
     Vector.length sourceMessages `shouldBe` 0
+
+  forM_ [False, True] $ \topicRoute ->
+    forM_ [False, True] $ \withOriginal ->
+      it ("DLQ consumer trace " <> (if topicRoute then "topic" else "direct") <> (if withOriginal then " with producer" else " without headers")) $ \TestFixture {pool, queueName, dlqName} -> do
+        let producerParent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+            producerState = "vendor=opaque"
+            original = object ["traceparent" .= (producerParent :: Text.Text), "tracestate" .= (producerState :: Text.Text), "custom" .= ("kept" :: Text.Text)]
+            routingKey = either (error . show) id $ parseRoutingKey "audit.dlq"
+            topicPattern = either (error . show) id $ parseTopicPattern "audit.dlq"
+            config =
+              (defaultConfig queueName)
+                { visibilityTimeout = 5,
+                  batchSize = 1,
+                  polling = StandardPolling {pollInterval = 0.1},
+                  deadLetterConfig = Just $ if topicRoute then topicDeadLetter routingKey True else directDeadLetter dlqName True
+                }
+        when topicRoute $ runPgmqSession pool $ Sessions.bindTopic $ BindTopic topicPattern dlqName
+        runPgmqSession pool $ do
+          if withOriginal
+            then do
+              _ <- Sessions.sendMessageWithHeaders $ SendMessageWithHeaders queueName (MessageBody (String "traced-dlq")) (MessageHeaders original) (Just 0)
+              pure ()
+            else do
+              _ <- Sessions.sendMessage $ SendMessage queueName (MessageBody (String "traced-dlq")) (Just 0)
+              pure ()
+        (spanProcessor, spansRef) <- inMemoryListExporter
+        processedRef <- newIORef (0 :: Int)
+        Exception.bracket
+          (OTel.createTracerProvider [spanProcessor] OTel.emptyTracerProviderOptions {OTel.tracerProviderOptionsIdGenerator = DefaultIdGenerator})
+          (\p -> OTel.shutdownTracerProvider p (Just 5_000_000))
+          $ \provider -> do
+            let tracer = OTel.makeTracer provider (OTel.InstrumentationLibrary "dlq-audit" "" "" emptyAttributes) OTel.tracerOptions
+            runAdapterIO pool $ runTracing tracer $ do
+              adapter <- requireAdapter pool config
+              result <- runApp defaultAppConfig [(ProcessorId "dlq-identity", mkProcessor adapter (deadLetterHandler processedRef))]
+              case result of
+                Left err -> liftIO $ expectationFailure $ show err
+                Right appHandle -> do
+                  liftIO $ waitForProcessed processedRef 1 3_000_000
+                  drained <- stopAppGracefully defaultShutdownConfig {drainTimeout = 5} appHandle
+                  liftIO $ drained `shouldBe` True
+        messages <- runPgmqSession pool $ Sessions.readMessage $ ReadMessage dlqName 30 (Just 10) Nothing
+        Vector.length messages `shouldBe` 1
+        spans <- readIORef spansRef
+        named <- mapM (\sp -> do hot <- readIORef (OTel.spanHot sp); pure (OTel.hotName hot, sp)) spans
+        case (Vector.uncons messages, [sp | ("dlq-identity process", sp) <- named]) of
+          (Just (msg, _), [consumer]) -> case msg.headers of
+            Just (Object hdrs) -> do
+              let stringHeader k = case KeyMap.lookup k hdrs of
+                    Just (String v) -> Just (Text.encodeUtf8 v)
+                    _ -> Nothing
+                  outgoing = [(Text.encodeUtf8 (Key.toText k), v) | k <- ["traceparent", "tracestate"], Just v <- [stringHeader k]]
+              case extractTraceContext outgoing of
+                Nothing -> expectationFailure "expected valid consumer context in DLQ"
+                Just ctx -> do
+                  OTel.traceId ctx `shouldBe` OTel.traceId (OTel.spanContext consumer)
+                  OTel.spanId ctx `shouldBe` OTel.spanId (OTel.spanContext consumer)
+              if withOriginal
+                then do
+                  KeyMap.lookup "x-shibuya-upstream-traceparent" hdrs `shouldBe` Just (String producerParent)
+                  KeyMap.lookup "x-shibuya-upstream-tracestate" hdrs `shouldBe` Just (String producerState)
+                  KeyMap.lookup "custom" hdrs `shouldBe` Just (String "kept")
+                  stringHeader "traceparent" `shouldNotBe` Just (Text.encodeUtf8 producerParent)
+                else KeyMap.lookup "x-shibuya-upstream-traceparent" hdrs `shouldBe` Nothing
+            _ -> expectationFailure "expected DLQ headers"
+          _ -> expectationFailure "expected one DLQ message and one consumer span"
 
   it "preserves trace headers when moving to DLQ" $ \TestFixture {pool, queueName, dlqName} -> do
     -- Send a message with trace headers
