@@ -2,6 +2,7 @@
 title: "Dead-letter routing"
 type: Capability
 description: "Opt-in dead-letter handling that moves a failed or over-retried message to a target queue in one PostgreSQL transaction, preserving a queryable reason code and optional detail alongside the compatibility rendering."
+timestamp: "2026-10-26T04:36:51Z"
 generated:
   by: codex/1.0
   at: "2026-08-10T21:15:04Z"
@@ -46,7 +47,7 @@ evidence:
     proves: How to configure, query, index, and migrate the dual-written DLQ contract, including detail safety and topic fan-out cost.
   - kind: benchmark
     resource: shibuya-pgmq-adapter-bench/bench-dlq/Main.hs
-    proves: Fully encoded legacy and dual-write payloads have bounded constant work plus linear copying as application detail grows.
+    proves: Fully encoded current and queue-aware payloads compare all reason constructors, both metadata modes and three body sizes, asserting exact source-field byte growth; timings remain diagnostic rather than performance acceptance.
 ---
 
 # Dead-letter routing
@@ -110,3 +111,27 @@ let config = (defaultConfig queueName)
   Operators can index `message ->> 'dead_letter_reason_code'` for a large DLQ.
   Topic routing multiplies encoding-adjacent network, WAL, and storage cost by
   every matching queue.
+
+## Unreleased administration preview
+
+The work in [plan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md)
+adds source identity to new envelopes and a separate
+`Shibuya.Adapter.Pgmq.DeadLetter` API behind the temporary manual `dlq-admin`
+Cabal flag. It requires unreleased upstream inspection sources and is not yet
+part of the default-build shipped interface listed above.
+
+Real PostgreSQL evidence in
+[`DeadLetterSpec.hs`](../../shibuya-pgmq-adapter/test/Shibuya/Adapter/Pgmq/DeadLetterSpec.hs)
+covers a public handler-to-browse/fetch roundtrip, 1..500-row keyset pages,
+invisible/malformed rows without mutation, structured/legacy history, explicit
+shared/topic registrations, disabled mutation before database access, original
+payload and arbitrary JSON header restoration, retries and concurrent claims,
+rollback, cancellation and transaction-local deadlines on separate pools.
+The [operator guide](../user/pgmq-dead-letter-queues.md) includes a compiled public
+embedding example and documents queue recreation and per-copy topic semantics.
+
+Numeric performance acceptance is still open. The
+[measurement report](../performance/9-dlq-browse-and-redrive.md) separates the
+initial original-dependency sample from the outstanding full paired matrix.
+No throughput, latency, allocation or partitioned-layout performance budget is
+claimed as validated by these correctness tests or the serialization benchmark.

@@ -213,3 +213,33 @@ The effectful layer adds minimal overhead (~5-20%) for most operations.
 - Times include queue setup/teardown overhead for some benchmarks
 - Results may vary based on PostgreSQL configuration and hardware
 - FIFO grouped reads are significantly slower due to the additional ordering constraints
+
+## DLQ worker controls and queue-aware serialization
+
+`dlq-payload-bench` compares current and queue-aware DLQ serialization for both
+metadata modes, all reason constructors, three body sizes and a large-detail
+case. It checks the exact compact-JSON contribution of `original_queue`.
+
+Plan 9's shared `app/DlqPerformance.hs` runner measures real adapter workers and
+times finalization through returned acknowledgements. Capture an immutable
+original-dependency control inside the Nix shell:
+
+```bash
+python3 scripts/capture-dlq-worker-baseline.py \
+  --baseline-ref e06e64b268055aca4eff78caabd1b0eb73aa1cd1 \
+  --output .dev/dlq-worker-control --repetitions 7 --seed-count 3000000
+```
+
+Run from the repository root on an otherwise idle machine. The script exports
+source into a fresh directory, instruments only that snapshot, builds optimized
+code, runs the seven worker cases sequentially in disposable PostgreSQL databases
+and retains settings, dependency identities and all latency observations. It
+refuses an existing output directory and fails on inconclusive capture. Increase
+fixture size before fixing an experiment if workers would exhaust it. It never
+accepts a production database connection.
+
+This captures worker controls only. The complete released candidate/control,
+operator-load, large-queue, encoding-allocation and retained-heap acceptance
+orchestrator remains open. See the [plan 9 evidence report](../docs/performance/9-dlq-browse-and-redrive.md)
+for actual measurements and outstanding gates. No performance PASS is inferred
+from correctness tests, serialization diagnostics or these initial controls.

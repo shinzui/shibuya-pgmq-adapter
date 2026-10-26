@@ -17,6 +17,12 @@ extra-doc-files: CHANGELOG.md
 common warnings
   ghc-options: -Wall
 
+-- Temporary integration switch until pgmq-hasql inspection is released.
+flag dlq-admin
+  description: Build the experimental DLQ administration API (requires unreleased inspection statements)
+  default: False
+  manual: True
+
 library
   import: warnings
   exposed-modules:
@@ -27,6 +33,9 @@ library
   other-modules:
     Shibuya.Adapter.Pgmq.Internal
 
+  if flag(dlq-admin)
+    exposed-modules: Shibuya.Adapter.Pgmq.DeadLetter
+    other-modules: Shibuya.Adapter.Pgmq.DeadLetter.Internal
   default-extensions:
     DeriveAnyClass
     DerivingStrategies
@@ -75,6 +84,14 @@ test-suite shibuya-pgmq-adapter-test
     src
 
   main-is: Main.hs
+
+  if flag(dlq-admin)
+    cpp-options: -DDLQ_ADMIN
+    other-modules:
+      DeadLetterExample
+      Shibuya.Adapter.Pgmq.DeadLetter
+      Shibuya.Adapter.Pgmq.DeadLetter.Internal
+      Shibuya.Adapter.Pgmq.DeadLetterSpec
   default-extensions:
     DeriveAnyClass
     DerivingStrategies

@@ -107,7 +107,7 @@ import Shibuya.Adapter.Pgmq.Config
     PollingConfig (..),
   )
 import Shibuya.Adapter.Pgmq.Convert
-  ( mkDlqPayload,
+  ( mkDlqPayloadForQueue,
     pgmqMessageToEnvelope,
   )
 import Shibuya.Core.Ack (AckDecision (..), DeadLetterReason (..), RetryDelay (..))
@@ -309,7 +309,7 @@ deadLetterTransactionally env config dlqConfig msg reason dlqHeaders = do
     Left err -> throwError (fromUsageError err)
     Right () -> pure ()
   where
-    dlqBody = mkDlqPayload msg reason dlqConfig.includeMetadata
+    dlqBody = mkDlqPayloadForQueue config.queueName msg reason dlqConfig.includeMetadata
     sourceQuery = MessageQuery config.queueName msg.messageId
     session =
       Transaction.Sessions.transaction

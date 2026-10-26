@@ -5,6 +5,7 @@
 module TmpPostgres
   ( -- * Test Execution
     withPgmqDb,
+    withPgmqDbPools,
     withRestartablePgmqDb,
     withTestFixture,
 
@@ -63,6 +64,14 @@ withPgmqDb action = withEphemeralPg $ \db -> do
     (createPool connSettings)
     Pool.release
     action
+
+-- | Independent worker and administrative pools against the same disposable DB.
+withPgmqDbPools :: Int -> Int -> (Pool.Pool -> Pool.Pool -> IO a) -> IO (Either StartError a)
+withPgmqDbPools workerSize adminSize action = withEphemeralPg $ \db -> do
+  let settings = Pg.connectionSettings db
+  installPgmqSchema settings
+  bracket (createPoolWithSize workerSize settings) Pool.release $ \workerPool ->
+    bracket (createPoolWithSize adminSize settings) Pool.release (action workerPool)
 
 -- | Run against an ephemeral database that the test may restart in place.
 -- The restart preserves the data directory, releases stale pooled connections,
@@ -154,10 +163,13 @@ installPgmqSchema connSettings = do
 
 -- | Create a connection pool from connection settings.
 createPool :: Settings.Settings -> IO Pool.Pool
-createPool connSettings = do
+createPool = createPoolWithSize 10
+
+createPoolWithSize :: Int -> Settings.Settings -> IO Pool.Pool
+createPoolWithSize poolSize connSettings = do
   let poolConfig =
         PoolConfig.settings
-          [ PoolConfig.size 10,
+          [ PoolConfig.size poolSize,
             PoolConfig.acquisitionTimeout (secondsToDiffTime 10),
             PoolConfig.agingTimeout (secondsToDiffTime 3600),
             PoolConfig.idlenessTimeout (secondsToDiffTime 60),

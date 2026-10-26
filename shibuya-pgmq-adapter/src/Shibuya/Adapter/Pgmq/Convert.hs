@@ -13,6 +13,7 @@ module Shibuya.Adapter.Pgmq.Convert
 
     -- * DLQ Payload
     mkDlqPayload,
+    mkDlqPayloadForQueue,
   )
 where
 
@@ -169,3 +170,13 @@ mkDlqPayload msg reason includeMetadata =
             "original_headers" .= msg.headers
           ]
       | otherwise = []
+
+-- | Create an adapter-managed DLQ envelope with an authoritative source queue.
+-- The original helper remains byte-for-byte compatible; source identity is
+-- present independently of the optional delivery metadata.
+mkDlqPayloadForQueue :: Pgmq.QueueName -> Pgmq.Message -> DeadLetterReason -> Bool -> Pgmq.MessageBody
+mkDlqPayloadForQueue queue msg reason includeMetadata =
+  case mkDlqPayload msg reason includeMetadata of
+    Pgmq.MessageBody (Object fields) ->
+      Pgmq.MessageBody (Object (KeyMap.insert "original_queue" (String (Pgmq.queueNameToText queue)) fields))
+    body -> body

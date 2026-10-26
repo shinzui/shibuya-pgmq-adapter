@@ -16,6 +16,11 @@ provenance:
       at: 2026-10-26T04:05:34Z
       mode: "update"
       note: "Require controlled performance baselines, numeric regression gates, administrative-load isolation measurements, and reproducible evidence before completion."
+    - model: "gpt-6.1-sol"
+      harness: "codex-cli"
+      at: 2026-10-26T04:18:38Z
+      mode: "implement"
+      note: "Implement administration API and PostgreSQL proofs; retain released-dependency and performance acceptance gates."
 ---
 
 
@@ -37,13 +42,17 @@ Completion also requires measured performance acceptance. Compare existing worke
 
 
 - [ ] M1 — Establish a supported dependency baseline, capture reproducible pre-feature performance measurements, and prove the public producer-to-browse path against real PostgreSQL, including source identity and exact reason fields.
-- [ ] M2 — Complete bounded browse and fetch, mixed-history decoding, explicit managed-queue registration, and tests proving reads do not modify rows.
-- [ ] M3 — Deliver disabled-by-default transactional redrive with typed outcomes, rollback, retry, and concurrent-call evidence.
+- [x] M2 — Implemented bounded browse/fetch, historical decoding and explicit physical registrations, verified against real PostgreSQL on 2026-10-25 using the temporary upstream source set. Tests compare all seven raw row fields, preserve invisible/malformed rows, cover 500-row lookahead, reject invalid requests before I/O, and verify separate-pool deadlines and setting cleanup. Released-dependency acceptance remains in M1/M4.
+- [x] M3 — Implemented default-off row-locked delete/send transactions, verified on 2026-10-25 against temporary upstream sources. Real database tests cover saved/missing/null headers, null payloads, normal handler input after redrive, concurrent calls, response-discard retry, rollback/recovery, cancellation, source authorization and distinct real topic fan-out copies. The final local-source suite passed 203 examples with zero failures, including 20 administration scenarios; the default released-dependency suite passed 183 examples. The released-dependency limitation remains open.
 - [ ] M4 — Pass the numeric performance gates with retained baseline/candidate evidence, complete operator documentation and durable records, and pass the final released-dependency build and test checks.
 
-Planning handoff, 2026-10-25: implementation has not begun. The required upstream inspection API exists in its working tree but is unreleased. M1's released-dependency prerequisite is open; pure decoder/configuration work can proceed independently. Do not report this plan complete with only a local dependency override.
+Implementation, 2026-10-25: Hackage and upstream release tags were rechecked; both still end at `pgmq-hasql 0.6.1.1`, whose published module list has no inspection API. The local upstream integration source is commit `fe2804f87115c8b5bcd20dfe29596e0f3f996674`. The fixed baseline source is exported to `.dev/dlq-performance/baseline-source`. Before production feature edits, its original-dependency `ack-one` sample recorded 245,678 committed observations in 60.040458s after 10s warmup; see `docs/performance/9-dlq-browse-and-redrive.md`. This is initial evidence, not the paired matrix or a passing performance gate. Released-dependency acceptance remains open; a temporary local proof cannot close M1 or M4.
 
 ## Surprises & Discoveries
+
+2026-10-25 — PGMQ's public `MessageHeaders` wraps arbitrary JSON, not only an object. Preserve any saved JSON header value, including scalars and arrays; only absent `original_headers` uses DLQ headers. Restricting that field to objects would reject valid adapter-produced envelopes. A dedicated real-database test covers these values.
+
+2026-10-25 — The upstream checkout has advanced to the unreleased `0.7.0.0` family at `fe2804f87115c8b5bcd20dfe29596e0f3f996674`; its only uncommitted change during inspection was an unrelated ADR. Released inspection remains unavailable (FRIC-1 in `docs/friction-log/`). A temporary project outside this repository supplies its four local family packages and explicit temporary solver allowances; tracked production dependency bounds remain unchanged.
 
 
 ## Decision Log
@@ -61,7 +70,15 @@ Planning handoff, 2026-10-25: implementation has not begun. The required upstrea
 
 2026-10-25 — At the user's request, make performance a completion gate rather than relying on separate pools and timeouts. Preserve a fixed baseline and require the numeric limits in Validation and Acceptance. These are chosen engineering budgets, not existing measurements. A failed or inconclusive result leaves M4 open; changing a limit requires an explicit user scope decision and a recorded rationale, not an implementation-time adjustment to make a result pass.
 
+2026-10-25 — Temporarily guard the administration exports and spec with the manual, default-off Cabal flag `dlq-admin`. This keeps the normal released-dependency build usable while allowing the explicitly permitted local integration proof. Before accepting M1/M4, remove this transitional flag, require the verified inspection release in both component bounds, and run the documented unflagged acceptance commands. The worker's queue-aware writer does not require the flag.
+
 ## Outcomes & Retrospective
+
+Implementation checkpoint, 2026-10-25: M2/M3 are locally proved; this plan is **not complete**. The normal released-dependency build and 183-example suite pass with administration excluded by the transitional flag. The temporary upstream source-set build passes 203 examples, including 20 administration scenarios and the compiled public embedding example. Haddock builds pass for both configurations. Capability, improvement-request and strict friction-log validation pass. `mori validate` exits zero with the pre-existing schema-hash warning (`d29ca032...` recorded versus `dcb19e23...` embedded); no schema migration was attempted.
+
+FRIC-1 remains `logged`: release-based acceptance cannot be triaged as resolved while upstream inspection is unreleased. No external release or issue was published. The durable administration decisions are distilled in [ADR 0002](../adr/0002-managed-dlq-administration.md).
+
+Remaining M1/M4 work is the actual released inspection bound and unflagged build, complete original/matched/candidate paired performance orchestration and measurements, and final IR-3 acceptance. The worker-control capture tool passed an end-to-end original-source `ack-one` run (293,551 observations; environment and full artifacts in `.dev/dlq-worker-capture-check/`). The final serialization diagnostic passed 60 cases and exact 26-byte source-field growth assertions. These support remaining work but do not replace any numeric gate. The detailed evidence report is `docs/performance/9-dlq-browse-and-redrive.md`. Do not change IR-3's status or declare performance acceptance from the local proof.
 
 
 ## Context and Orientation
@@ -157,6 +174,43 @@ git ls-remote --tags https://github.com/shinzui/pgmq-hs.git
 Resolve the returned local project path and inspect its package exports and sources, then verify the selected release's published Cabal file and tag contain the same API. Expected current result is latest release `0.6.1.1` without inspection. Once a suitable release exists, record its exact version here and set the actual minimum bound; no guessed future version is prescribed.
 
 For an early proof before release, create a temporary Cabal project outside the tracked tree that lists the three local packages plus the required upstream family packages at paths discovered by Mori. Copy the existing `cabal.project` solver allowances into that temporary project and record the upstream commit. Run the same commands below with `--project-file` pointing to it. This proof may inform implementation but cannot close M1 or M4 until the released build passes. Do not overwrite a user's `cabal.project.local`.
+
+At this implementation checkpoint, the administration API/spec are behind the transitional `dlq-admin` flag. To reproduce the permitted local-source proof in a fresh checkout, run the following Python from this repository root (Mori resolves the canonical upstream project; no tracked project file is overwritten):
+
+```python
+from pathlib import Path
+import subprocess
+import tempfile
+
+root = Path.cwd()
+upstream = Path(subprocess.check_output(
+    ["mori", "path", "mori://shinzui/pgmq-hs"], text=True).strip())
+project_dir = Path(tempfile.mkdtemp(prefix="shibuya-dlq-plan9-"))
+packages = [root / name for name in (
+    "shibuya-pgmq-adapter", "shibuya-pgmq-adapter-bench", "shibuya-pgmq-example")]
+packages += [upstream / name for name in (
+    "pgmq-core", "pgmq-hasql", "pgmq-effectful", "pgmq-migration")]
+allowances = (root / "cabal.project").read_text().split("allow-newer:", 1)[1].strip()
+project = project_dir / "cabal.project"
+project.write_text("packages:\n" + "".join(f"  {path}\n" for path in packages)
+    + "\nallow-newer:\n  " + allowances
+    + ",\n  *:pgmq-core,\n  *:pgmq-hasql,\n  *:pgmq-effectful,\n  *:pgmq-migration\n"
+    + "\npackage shibuya-pgmq-adapter\n  flags: +dlq-admin\n")
+(root / ".dev").mkdir(exist_ok=True)
+(root / ".dev/dlq-integration-project").write_text(str(project))
+print(project)
+```
+
+Then run the focused or full suite using that temporary project:
+
+```bash
+nix develop --no-write-lock-file -c cabal test shibuya-pgmq-adapter-test \
+  --project-file="$(cat .dev/dlq-integration-project)" \
+  --builddir=dist-dlq-integration --enable-tests --test-show-details=direct \
+  --test-options='--match "Dead-letter administration"'
+```
+
+The current focused suite executes 20 examples with zero failures. Omitting `--test-options` executes 203 examples. These are temporary integration proofs, not released-dependency acceptance. Remove the temporary flag and set the actual released minimum before using the unflagged acceptance commands below.
 
 After adding the public API/spec registration, run the focused tests with the spec's top-level description set to `Dead-letter administration`:
 

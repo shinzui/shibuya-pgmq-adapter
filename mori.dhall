@@ -140,6 +140,13 @@ in  Schema.Project::{ project =
         , description = Some "Reproducible defects in published PGMQ adapter behavior"
         }
       , Schema.OkfBundle::{
+        , name = "friction-log"
+        , path = "docs/friction-log"
+        , profile = Some "docs/friction-log/profile.dhall"
+        , okfVersion = "0.2"
+        , description = Some "Friction met while implementing plans, before triage"
+        }
+      , Schema.OkfBundle::{
         , name = "improvement-requests"
         , path = "docs/improvement-requests"
         , profile = Some "docs/improvement-requests/profile.dhall"

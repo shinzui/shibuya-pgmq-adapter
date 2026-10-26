@@ -1,0 +1,164 @@
+# DLQ administration performance evidence
+
+Plan: [ExecPlan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md).
+
+Status: **incomplete**. No numeric performance gate has passed. The released
+inspection dependency is still unavailable, and the complete paired candidate,
+matched-dependency, administrative-load, large-queue, allocation and retained-heap
+matrix has not been measured. Ordinary, unlogged and partitioned queues have no
+validated performance budget from this work yet. Correctness tests and the
+serialization benchmark do not establish performance isolation.
+
+## Preserved original control
+
+Before production feature edits, export commit
+`e06e64b268055aca4eff78caabd1b0eb73aa1cd1` into
+`.dev/dlq-performance/baseline-source` using `git archive`. Apply only the new
+worker executable's Cabal component and its two instrumentation modules. The
+exact initial instrumentation diff is retained at
+`.dev/dlq-performance/initial-instrumentation.patch`; it predates the later
+capture script and its additional environment reporting. The production adapter
+source in that export is unchanged.
+
+The initial original-dependency run used:
+
+```bash
+nix develop --no-write-lock-file -c cabal run dlq-performance \
+  --project-dir=.dev/dlq-performance/baseline-source \
+  --builddir=dist-baseline --enable-optimization=2 -- \
+  ack-one 10 60 1000000 +RTS -N4 -T -RTS
+```
+
+The runner created its own disposable PostgreSQL database, installed PGMQ and
+seeded 1,000,000 original messages before starting a real `pgmqAdapter` worker.
+Each body carried a 100-character ASCII string inside an object (111 compact JSON
+bytes); this initial fixture is not the final matrix's exact 100-byte body. Finalization was `AckOk`, batch
+size one, one worker and four pool connections. The sample excludes setup,
+seeding and the ten-second warmup. A latency observation ends after the adapter
+finalizer returns, including confirmed acknowledgement. Completions are measured
+separately from handler invocations. Runtime allocation totals cover the measured
+worker interval, including common instrumentation; they are not encoding-loop
+allocation evidence.
+
+| Initial observation | Result |
+|---|---:|
+| Measured duration | 60.040458 seconds |
+| Committed observations | 245,678 |
+| Committed throughput | 4,091.874 messages/second |
+| Finalization p95 | 0.098 milliseconds |
+| Allocated bytes per measured commit | 40,452.800 |
+| Rows left at completion | 659,606 |
+
+Artifacts retain all latency observations in
+`.dev/dlq-performance/baseline-ack-one.json`, original build/run output in
+`.dev/dlq-performance/baseline-ack-one.log`, and the exact resolved dependencies in
+`.dev/dlq-performance/baseline-source/dist-baseline/cache/plan.json`.
+The initial sample is a diagnostic original-worker baseline, not a paired
+comparison: there are no candidate ratios, bootstrap bounds or passing budgets
+to report.
+
+Environment: Apple M5 Ultra (`Mac17,15`), 274,877,906,944 bytes physical memory,
+`aarch64-osx`, GHC 9.12.4, Cabal 3.16.1.0, library optimization `-O2`, executable
+`-O2`, runtime `-N4 -T`, PostgreSQL 18.6. The initial runner did not retain
+PostgreSQL settings; the current runner now records server version, buffers,
+work memory, durability settings and connection limits before timing. This
+missing initial environment detail is another reason the sample cannot stand
+in for final acceptance.
+
+The initial plan resolved the [PGMQ family](mori://shinzui/pgmq-hs) packages
+`pgmq-core`, `pgmq-hasql`, `pgmq-effectful` and
+`pgmq-migration` to 0.6.1.1, [`shibuya-core`](mori://shinzui/shibuya/packages/shibuya-core) to 0.11.0.0,
+[`effectful-core`](mori://effectful/effectful/packages/effectful-core) to
+2.7.1.2, [Hasql family](mori://hasql/hasql) packages `hasql` to 1.10.3.7,
+`hasql-pool` to 1.4.2.3,
+`hasql-transaction` to 1.2.3.1 and `aeson` to 2.2.5.1.
+
+## Reproducible worker control capture
+
+The shared runner uses only the pre-feature public worker API. The capture
+script exports the selected commit into an isolated output directory, applies
+identical instrumentation, builds with optimization, and retains a source patch,
+instrumentation hashes, compiler/hardware information, the complete dependency
+plan, database settings, raw observations and per-run summaries. It never accepts
+a database connection or uses a persistent application database. Each Haskell
+child scopes and stops its disposable PostgreSQL instance; the orchestrator
+interrupts only its own child process group on cancellation. Existing output
+directories are refused to preserve failed and inconclusive evidence.
+
+```bash
+nix develop --no-write-lock-file -c python3 scripts/capture-dlq-worker-baseline.py \
+  --baseline-ref e06e64b268055aca4eff78caabd1b0eb73aa1cd1 \
+  --output .dev/dlq-worker-control --repetitions 7 --seed-count 3000000
+```
+
+Defaults are ten seconds warmup and sixty seconds measurement, with all seven
+worker scenarios from plan 9. Fewer than 1,000 observations, queue depletion or
+child failure makes capture inconclusive and exits nonzero. Choose an adequate
+fixture size before beginning the fixed experiment; retain every run. Run on an
+otherwise idle machine. This command captures only the original dependency
+control, not paired candidate comparisons or any administration workloads.
+
+The capture script itself was exercised end to end with the final exact-size
+worker fixture:
+
+```bash
+nix develop --no-write-lock-file -c python3 scripts/capture-dlq-worker-baseline.py \
+  --baseline-ref e06e64b268055aca4eff78caabd1b0eb73aa1cd1 \
+  --scenario ack-one --output .dev/dlq-worker-capture-check
+```
+
+It exited zero with `BASELINE-CAPTURE: COMPLETE (original worker control only;
+not performance acceptance)`. Its one 60.039293-second measured sample contains
+293,551 committed observations, 4,889.315 messages/second, finalization p95
+0.056ms, 39,682.722 allocated bytes per commit and 634,351 remaining rows.
+This run validates orchestration and retained evidence, not a regression ratio.
+The fixture differs from the initial diagnostic by using an exactly 100-byte
+compact JSON string; do not pair these two initial samples with each other.
+
+All raw data, immutable source export, instrumentation patch/hashes and dependency
+identities are retained under `.dev/dlq-worker-capture-check/`. `environment.json`
+records macOS 27.0.1, arm64, 36 logical CPUs, GHC 9.12.4, PostgreSQL 18.6 and the
+hardware listed above. `ack-one-1.json` records `shared_buffers=12MB`,
+`work_mem=4MB`, `max_connections=100`, **`fsync=off` and
+`synchronous_commit=off`**, the disposable database helper's defaults. These are
+confirmed database operations in that configuration, not production durability
+or production SLO measurements. Keep the complete PostgreSQL configuration fixed
+between future controls and candidates and record it explicitly.
+
+## Serialization diagnostics
+
+`shibuya-pgmq-adapter-bench/bench-dlq/Main.hs` now compares the current dual-write
+helper with `mkDlqPayloadForQueue` over both metadata modes, all reason
+constructors, 100/10,000/100,000-byte compact JSON string bodies and an additional 8-KiB
+application-detail case. Every case checks that the compact JSON byte increase
+equals exactly the source field contribution, independently of body/detail size.
+For source `orders`, that contribution is 26 bytes. PostgreSQL JSONB storage uses
+a different representation and is not established by this compact JSON check.
+
+```bash
+nix develop --no-write-lock-file -c cabal bench \
+  shibuya-pgmq-adapter-bench:bench:dlq-payload-bench --benchmark-options='--stdev 10'
+```
+
+The final diagnostic run is retained at `.dev/dlq-payload-bench.log`, using the
+10% tasty-bench deviation setting because timing is diagnostic here. The earlier
+default-deviation run with 100/10,000/100,000-character bodies is retained at
+`.dev/dlq-payload-bench-initial.log`; it is not the exact-size final matrix. Neither is the
+required dedicated repeated-encoding allocation loop or bootstrap comparison.
+
+## Remaining acceptance
+
+After a suitable inspection release is verified, choose its actual dependency
+bounds, remove the temporary administration flag and run a released-dependency
+candidate. The full `scripts/check-dlq-performance.py` acceptance orchestrator is
+still to be implemented. It must retain both the original dependency baseline
+and a matched released-dependency control; neither the local 0.7.0.0 integration
+proof nor the single baseline sample replaces these controls.
+
+Run the entire matrix and numeric budgets in plan 9, including initialization
+with an idle administration handle, the no-handle comparison, dedicated encoding
+allocations, fixed-rate successful operator traffic with scheduled-arrival
+latency/backlog counts, 100k/1m ordinary and unlogged read fixtures, raw-read
+controls and actual query plans, and five-minute retained-heap measurements.
+Retain all paired runs and confidence bounds. Failed or inconclusive budgets
+leave M4 open; none may be relaxed without the user's scope decision.

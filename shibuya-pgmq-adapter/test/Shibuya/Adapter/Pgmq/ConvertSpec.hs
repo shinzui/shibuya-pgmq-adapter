@@ -21,6 +21,7 @@ spec = do
   extractTraceHeadersSpec
   pgmqMessageToEnvelopeSpec
   mkDlqPayloadSpec
+  mkDlqPayloadForQueueSpec
 
 -- | Tests for messageIdToShibuya
 messageIdToShibuyaSpec :: Spec
@@ -455,3 +456,40 @@ representativeDeadLetterCode =
   case mkDeadLetterCode "keiro.router.selection.recipient_overflow" of
     Left err -> error (Text.unpack err)
     Right code -> code
+
+mkDlqPayloadForQueueSpec :: Spec
+mkDlqPayloadForQueueSpec = describe "mkDlqPayloadForQueue" $ do
+  let timestamp = UTCTime (fromGregorian 2026 10 25) 0
+      queue = either (error . show) id (Pgmq.parseQueueName "orders")
+      msg =
+        Pgmq.Message
+          (Pgmq.MessageId 42)
+          timestamp
+          timestamp
+          (Just timestamp)
+          3
+          (Pgmq.MessageBody (object ["order" .= (7 :: Int)]))
+          (Just (object ["x-pgmq-group" .= ("a" :: Text.Text)]))
+      reason = ApplicationFailure representativeDeadLetterCode "注文: failed"
+      baseFields =
+        [ "original_queue" .= ("orders" :: Text.Text),
+          "original_message" .= object ["order" .= (7 :: Int)],
+          "dead_letter_reason" .= ("keiro.router.selection.recipient_overflow: 注文: failed" :: Text.Text),
+          "dead_letter_reason_code" .= ("keiro.router.selection.recipient_overflow" :: Text.Text),
+          "dead_letter_reason_detail" .= ("注文: failed" :: Text.Text)
+        ]
+  it "writes the exact queue-aware envelope without optional metadata" $
+    mkDlqPayloadForQueue queue msg reason False `shouldBe` Pgmq.MessageBody (object baseFields)
+  it "writes the exact queue-aware envelope with original metadata" $
+    mkDlqPayloadForQueue queue msg reason True
+      `shouldBe` Pgmq.MessageBody
+        ( object
+            ( baseFields
+                ++ [ "original_message_id" .= (42 :: Int),
+                     "original_enqueued_at" .= timestamp,
+                     "last_read_at" .= timestamp,
+                     "read_count" .= (3 :: Int),
+                     "original_headers" .= object ["x-pgmq-group" .= ("a" :: Text.Text)]
+                   ]
+            )
+        )
