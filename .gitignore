@@ -4,7 +4,6 @@ dist-newstyle/
 cabal-dev
 
 .direnv
-.envrc
 
 .pre-commit-config.yaml
 
@@ -20,3 +19,6 @@ CLAUDE.local.md
 .agents/
 .mina/
 .codex/
+.envrc.local
+result
+result-*

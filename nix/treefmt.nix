@@ -1,22 +1,18 @@
-# treefmt-nix as a flake-parts module (wires `nix fmt` + a treefmt flake check).
-# fourmolu and cabal-gild are taken from the ghc9124 package set so they match
-# the project's compiler.
+# treefmt-nix as a flake-parts module. This automatically wires `nix fmt`
+# (the flake `formatter`) and a `treefmt` flake check. seihou-managed.
 { inputs, ... }:
 {
   imports = [ inputs.treefmt-nix.flakeModule ];
 
-  perSystem = { pkgs, ... }:
-    let
-      haskellPkgs = pkgs.haskell.packages.ghc9124;
-    in
-    {
-      treefmt = {
-        projectRootFile = "flake.nix";
-        programs.nixpkgs-fmt.enable = true;
-        programs.fourmolu.enable = true;
-        programs.fourmolu.package = haskellPkgs.fourmolu;
-        programs.cabal-gild.enable = true;
-        programs.cabal-gild.package = haskellPkgs.cabal-gild;
-      };
+  perSystem = { ... }: {
+    treefmt = {
+      projectRootFile = "flake.nix";
+      programs.nixpkgs-fmt.enable = true;
+      programs.fourmolu.enable = true;
+      # cabal-gild (github.com/tfausak/cabal-gild) formats *.cabal plus
+      # cabal.project/cabal.project.local, and can discover module lists from
+      # the filesystem via `-- cabal-gild: discover <dir>` pragmas.
+      programs.cabal-gild.enable = true;
     };
+  };
 }
