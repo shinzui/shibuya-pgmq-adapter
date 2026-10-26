@@ -5,6 +5,19 @@ title: "Remove the legacy dead-letter reason field after structured rollout"
 kind: exec-plan
 created_at: 2026-08-10T20:25:53Z
 intention: "intention_01kzpnmftmeex93pfzdkr5zck8"
+provenance:
+  revisions:
+    - model: "gpt-6-astra"
+      harness: "codex-cli"
+      at: 2026-10-26T03:44:32Z
+      mode: "update"
+      note: "Refresh rollout blockers, release selection, ADR constraints, benchmark controls, and executable acceptance after repository review."
+  reviews:
+    - model: "gpt-6-astra"
+      harness: "codex-cli"
+      at: 2026-10-26T03:48:10Z
+      verdict: "approved"
+      note: "Approved as a deferred plan after source, ADR, release, dependency, SQL-fixture, and documentation checks; G0 remains closed for Keiro migration and incomplete adoption evidence; existing Mori validation failure recorded."
 ---
 
 # Remove the legacy dead-letter reason field after structured rollout
@@ -16,7 +29,9 @@ If durable project context changes, update or create ADRs in docs/adr/ in the sa
 
 ## Purpose / Big Picture
 
-This is a deliberately deferred breaking-change plan. Do not implement it as part of the
+This is optional, deliberately deferred cleanup: structured reasons already work while the legacy
+field remains. Its benefit is a smaller payload and removal of a duplicate representation; it
+is not a prerequisite for structured-reason support. Do not implement it as part of the
 structured-reason rollout in [Plan 5](./5-preserve-structured-dead-letter-reasons-in-pgmq-dlq-payloads.md).
 It becomes actionable only after an adapter release has dual-written the legacy rendered reason
 and the structured code/detail long enough for known consumers to migrate, and after the
@@ -52,13 +67,18 @@ and comparing its encoded and PostgreSQL JSONB sizes with a dual-written control
   prove their structured-field adoption, complete the deprecation window, and record explicit
   maintainer approval to begin this breaking change.
 - [ ] M1 — Capture the released dual-write baseline, choose the next PVP-breaking adapter version,
-  and publish migration notes before changing output.
+  and prepare migration notes before changing output.
 - [ ] M2 — Stop writing `dead_letter_reason`, update exact unit/property/database coverage, and
   retain structured code/detail semantics for every reason.
 - [ ] M3 — Compare serialization and JSONB size with the dual-write release, update capability and
   operator documentation for mixed historical rows, and run all repository gates.
 - [ ] M4 — Publish/tag the breaking release, verify downstream resolution, and complete the ADR
   distillation and retrospective.
+
+
+Review handoff (2026-10-25): Plan 5 and IR-1 are complete, but G0 remains closed. Keiro
+still requires the legacy field when decoding DLQ rows. This review updates the deferred plan;
+it does not authorize removal, mark implementation milestones complete, or approve a release.
 
 
 ## Surprises & Discoveries
@@ -80,6 +100,44 @@ and comparing its encoded and PostgreSQL JSONB sizes with a dual-written control
 - No local `docs/adr/` directory or ADR bundle existed during authoring. Repeat discovery at G0 and
   again before completion; do not invent an ADR format only because this plan anticipates a durable
   wire break.
+
+- Review on 2026-10-25 verified Hackage's preferred-version metadata and upstream tags: the
+  newest published/tagged adapter was 0.16.1.0; 0.14.0.0 is published and its tag peels to
+  `301652375ecdec01c4e1ff50902900ad3a078ea3`. The working tree is already 0.17.0.0.
+  The old proposed 0.15.0.0 removal version is therefore unavailable. The provisional next
+  breaking family is 0.18.0.0, subject to rechecking published, tagged, and locally reserved
+  versions at G0. A PVP-breaking family changes the first two components of `A.B.C.D`;
+  this repository normally increments `B` for such changes.
+- The same reverse-dependency query now reports 15 projects:
+  `mori://shinzui/danwa`, `mori://shinzui/kansoku`, `mori://shinzui/kawa`,
+  `mori://shinzui/keiro`, `mori://shinzui/keiro-runtime-docs`,
+  `mori://shinzui/keiro-runtime-jitsurei`, `mori://shinzui/keiro-runtime-kenshou`,
+  `mori://shinzui/keiro-runtime-patterns`, `mori://shinzui/kikan`, `mori://shinzui/kizashi`,
+  `mori://shinzui/mori`, `mori://shinzui/rei`, `mori://tan/mls-service-v2`,
+  `mori://tan/notification-hub`, and `mori://tan/registration-service-v2`.
+  This is a discovery inventory, not completed adoption evidence; reader classification,
+  deployed versions, owner actions, and executable evidence remain G0 work.
+- Current source in `mori://shinzui/keiro/packages/keiro-pgmq` is version 0.21.0.0 with
+  adapter bound `^>=0.16.1.0`. In `mori://shinzui/keiro`, project-relative
+  `keiro-pgmq/src/Keiro/PGMQ/Dlq.hs` (artifact-level URI pending), `parseDlqEnvelope` uses
+  `obj .: "dead_letter_reason"`. Its read/redrive workflows therefore cannot yet accept
+  structured-only rows. The corresponding `keiro-pgmq/test/Main.hs` (same project,
+  artifact-level URI pending) has legacy-shaped fixtures. The Keiro owner must migrate
+  the decoder and prove read/redrive over all three schemas under a separate consumer plan.
+  Registry metadata still reports older bounds, so inspect source rather than trusting it.
+- The mixed-history SQL below passed 12 fixtures on PostgreSQL 17.11 during review: legacy,
+  dual-written, and structured-only built-ins; dual-written and structured-only application
+  reasons; empty detail; Unicode and embedded delimiters; and structured null taking precedence
+  over conflicting legacy detail. Compact JSON lengths independently reproduced the benchmark
+  fixture's 157 legacy, 306 dual-written, and 191 structured-only bytes. This validates the
+  query and byte arithmetic, not the unimplemented adapter change or its timing.
+- Review validation: both profile-enforced/log-enforced OKF commands in Concrete Steps passed (3 improvement
+  requests and 6 capabilities), and `mori validate` passed with a schema-hash warning. However,
+  `mori improvement-requests validate --path .` fails because IR-1, IR-2, and IR-3 lack the
+  currently required `generated` frontmatter field. Resolve this existing metadata mismatch
+  against the current Mori contract before claiming all release gates pass; do not invent
+  historical generation metadata. Build, full adapter tests, and Nix gates were not run for
+  this documentation-only review.
 
 
 ## Decision Log
@@ -124,10 +182,19 @@ and comparing its encoded and PostgreSQL JSONB sizes with a dual-written control
   already-adopted contract for marginal key savings.
   Date: 2026-08-10.
 
+- Decision: Retain G0 as closed and use the updated version-selection and benchmark procedure.
+  Rationale: Keiro's reader still requires the legacy key; the old target version is used;
+  historical release timing includes dependency changes unrelated to field removal. Record
+  non-reader classification explicitly rather than requiring documentation projects to supply
+  nonexistent DLQ reader tests. This review changes no production contract.
+  Date: 2026-10-25.
+
 
 ## Outcomes & Retrospective
 
-Deferred at authoring time. Gate G0 has not been evaluated and no removal is authorized.
+Review updated the plan on 2026-10-25. Gate G0 remains closed because a known reader still
+requires the legacy field and the remaining adoption inventory is unverified. No implementation
+or publication was performed; removal remains optional deferred cleanup.
 
 
 ## Context and Orientation
@@ -136,8 +203,9 @@ This repository's published library is in `shibuya-pgmq-adapter/`; tests are und
 `shibuya-pgmq-adapter/test/`; the pure payload benchmark introduced by Plan 5 is under
 `shibuya-pgmq-adapter-bench/`; and user/capability documentation is under `docs/`.
 
-Plan 5 is the prerequisite and source of the dual-write contract. Its intended 0.14.0.0 release
-changes `mkDlqPayload` in `shibuya-pgmq-adapter/src/Shibuya/Adapter/Pgmq/Convert.hs` to emit:
+Plan 5 is complete and its published 0.14.0.0 release introduced the dual-write contract.
+The current working tree still uses `mkDlqPayload` in
+`shibuya-pgmq-adapter/src/Shibuya/Adapter/Pgmq/Convert.hs` to emit:
 
 ```json
 {
@@ -152,8 +220,10 @@ The legacy field is a canonical compatibility rendering owned by
 `mori://shinzui/shibuya/packages/shibuya-core`; the two structured fields are the adapter's JSON
 contract. `mkDlqPayload` is called only by the configured-DLQ `AckDeadLetter` branch in
 `shibuya-pgmq-adapter/src/Shibuya/Adapter/Pgmq/Internal.hs`. Success, retry, halt, and
-archive-without-DLQ paths do not construct this payload. The send and source delete run in one
-PostgreSQL transaction and must remain unchanged.
+archive-without-DLQ paths do not construct this payload. The source delete and send run in one
+PostgreSQL transaction and must remain unchanged. The delete claims the source first, and a
+DLQ copy is sent only if that delete returned true. This ordering prevents duplicate copies
+when a committed move is retried after its response was lost.
 
 The source improvement request is
 `mori://shinzui/shibuya-pgmq-adapter/okf/improvement-requests/concepts/IR-1`. Plan 5 completes that
@@ -164,8 +234,10 @@ request has completed.
 The first known adopter is
 `mori://shinzui/keiro/packages/keiro-pgmq`, coordinated by
 `mori://shinzui/keiro/plans/230-make-declarative-dynamic-router-fan-out-first-class-in-keiro-dsl`.
-At authoring time Keiro still requires adapter `>=0.13 && <0.14`, so it is not adoption evidence
-yet. Gate G0 requires a released-compatible bound and tests that query the structured fields.
+Keiro has since advanced to adapter `^>=0.16.1.0`, but its DLQ decoder still requires the
+legacy key as recorded above. Gate G0 requires both compatible bounds and executable reader
+coverage of structured-only and historical rows. The historical Keiro coordination plan exists
+on disk, although its canonical URI did not resolve through the current registry during review.
 `mori registry dependents` must be rerun because project registrations and consumer versions can
 change.
 
@@ -198,8 +270,12 @@ dual-write release, so structured data is available for every application reason
 documentation, not an adapter-side parser or a database migration. Operators must substitute their
 validated queue table and apply their own access controls.
 
-There is no local ADR corpus at authoring time. The future implementer must repeat the conditional
-ADR workflow and summarize any relevant decision locally if a corpus has appeared.
+The relevant local decision is [ADR 0001](../adr/0001-idempotent-dead-letter-moves.md),
+`docs/adr/0001-idempotent-dead-letter-moves.md`. It requires delete-before-send within the
+transaction, serialized finalization, and observable exhausted acknowledgement failures.
+Preserve its crash, concurrency, cancellation, and rollback behavior. The ADR directory is
+not an OKF bundle in the current manifest; retain its existing filesystem convention and
+repeat discovery before distilling the eventual wire-format decision.
 
 
 ## Plan of Work
@@ -213,30 +289,46 @@ carried both schemas; a release that was tagged but never adopted is not suffici
 
 Run Mori's reverse-dependency lookup. For every registered package/project, inspect current
 dependency bounds and DLQ reader code at the source path Mori reports. Also inspect already-known
-first-party consumers even if reverse metadata omits them. A consumer counts as adopted only when
+first-party consumers even if reverse metadata omits them. Classify each dependent as a DLQ reader,
+writer-only user, documentation project, or inactive
+consumer, with source evidence and any operator readers identified. A package dependency alone
+does not prove it reads DLQs. A reader counts as adopted only when
 its released or deployment-target code prefers `dead_letter_reason_code` and
 `dead_letter_reason_detail`, tolerates old rows, and has executable coverage. Merely widening a
 Cabal bound does not count.
 
 Record the inventory in Surprises & Discoveries with canonical project/package URIs, versions,
 test evidence, and any remaining owner/action. External public users cannot be enumerated, so also
-confirm the 0.14 release notes marked the legacy field deprecated and prepare a prominent breaking
-migration note. The maintainer must add a dated Decision Log entry saying Gate G0 is open. If any
+verify the migration notice actually shipped: the 0.14 changelog describes compatibility
+dual writing, and the user guide calls the field temporary. IR-1 links the deferred removal plan. Do not
+claim the historical changelog explicitly deprecated it. Prepare a prominent breaking migration
+note; the maintainer must judge whether the published notice and adoption provide an adequate
+window. The maintainer must add a dated Decision Log entry saying Gate G0 is open. If any
 known consumer is not ready, leave G0 unchecked and stop.
 
 ### Milestone 1 — Capture the dual-write baseline and announce the break
 
-Re-verify current Hackage releases and upstream tags. If Plan 5 was not released as 0.14.0.0 or an
-intervening release exists, revise this plan's target version to the next unused PVP-breaking
-family. Do not change Shibuya bounds unless an independently required API migration is planned and
+Re-verify current Hackage releases, upstream tags, and locally reserved versions. The review
+provisionally targets 0.18.0.0 after the current 0.17.0.0 tree; select the next unused
+PVP-breaking family at G0 and record it in the Decision Log. The original conditional
+0.15.0.0 decision is historical and superseded by this selection rule. Do not change Shibuya bounds
+unless an independently required API migration is planned and
 documented; this plan is about the JSON field removal.
 
-Run the pure payload benchmark from the released dual-write tag in a detached temporary worktree,
-then run it on the pre-removal current tree with identical compiler and RTS options. Store short
+In `shibuya-pgmq-adapter-bench/bench-dlq/Main.hs`, first preserve explicit legacy and dual-write
+control encoders and add a `production` benchmark that calls `mkDlqPayload`. Currently the
+function named `encodeDualWritePayload` calls production directly; leaving it that way would
+silently relabel structured-only output as dual-write after removal. Keep the three case names
+and control shapes stable; print lengths for all three encoders. Capture the current-tree
+`production` CSV before changing production code, then compare it after removal with the same
+compiler, resolved dependency versions, optimization, and RTS options (runtime-system flags).
+Also run the historical v0.14.0.0 benchmark in a detached worktree for release context; its older
+dependencies mean it cannot alone isolate the cost of removing a field. Store short
 CSV/output evidence outside the repository until results are summarized here. Record encoded byte
 length and PostgreSQL `pg_column_size(message)` for the representative application reason.
 
-Add unreleased breaking entries to both changelogs and update the user guide before code removal so
+Add unreleased breaking entries to `CHANGELOG.md` and `shibuya-pgmq-adapter/CHANGELOG.md` and update
+the user guide before code removal so
 the migration contract is reviewable independently. The notes must say that new rows omit
 `dead_letter_reason`, old rows remain untouched, code/detail fields are unchanged, and consumers
 must support mixed history.
@@ -248,18 +340,36 @@ Edit `mkDlqPayload` in `shibuya-pgmq-adapter/src/Shibuya/Adapter/Pgmq/Convert.hs
 that module uses it. Keep upstream code/detail projections, `original_message`, optional metadata,
 and all transaction code unchanged.
 
-Update `ConvertSpec.hs` and `PropertySpec.hs` so every reason proves the legacy key is absent and
+Update `shibuya-pgmq-adapter/test/Shibuya/Adapter/Pgmq/ConvertSpec.hs` and
+`shibuya-pgmq-adapter/test/Shibuya/Adapter/Pgmq/PropertySpec.hs` so every reason proves the legacy
+key is absent and
 the structured values remain identical to Plan 5. Preserve the incomplete-pattern warning gate in
 the test generator/shrinker. Keep empty text distinct from null and retain Unicode/escaping cases.
 
-Update the PostgreSQL-backed `ChaosSpec.hs` application-reason example. It must query the real DLQ
+Update the PostgreSQL-backed application-reason example in
+`shibuya-pgmq-adapter/test/Shibuya/Adapter/Pgmq/ChaosSpec.hs`. It must query the real DLQ
 and prove that `message ? 'dead_letter_reason'` is false, code/detail are exact, the source was
 deleted transactionally, and repeated successful finalize still creates one DLQ row. Existing
-trace, retry, atomicity, and topic/direct behavior remains green.
+trace, retry, atomicity, and topic/direct behavior remains green. Extend
+`inspectDlqPayloadStatement` to decode `message ? 'dead_letter_reason'` as a non-null Boolean:
+`->>` alone cannot distinguish an absent key from JSON null. Preserve the ADR 0001 cases for
+lost commit confirmation, concurrent finalization, cancellation, and failed-send rollback.
 
 ### Milestone 3 — Prove byte recovery and document mixed history
 
-Run the same pure benchmark and JSONB size probe used for the dual-write baseline. For the
+Run the same pure benchmark and JSONB size probe used for the dual-write baseline. In the
+existing application-reason example, retain the legacy control and add an explicit dual-write
+control with the same original body and metadata setting as the production row. Measure all
+three with `pg_column_size(message)` through the same `pgmq.read` projection, and report both
+deltas. This is PostgreSQL's JSONB datum size, not total table/index/WAL storage. Do not silently
+compare against only the existing legacy control while calling it a dual-write baseline.
+
+Add a database-backed example in `shibuya-pgmq-adapter/test/Shibuya/Adapter/Pgmq/ChaosSpec.hs`
+named `projects mixed-history DLQ reasons`. Apply the documented SQL projection to fixture
+rows covering all three schemas for built-ins and both structured schemas for application
+reasons. Assert null versus empty detail, Unicode/escaping, embedded `: `, and structured
+fields taking precedence over conflicting legacy text. Use a SELECT over VALUES in the
+existing ephemeral database; no production row mutation is needed. For the
 representative compact JSON, removal should recover about 115 bytes. Record actual encoded and
 physical deltas; investigate if output grows, serialization becomes nonlinear, or a database
 statement changes. The normal processing path remains unaffected because `mkDlqPayload` stays
@@ -277,7 +387,9 @@ edits from this plan silently.
 
 ### Milestone 4 — Publish the breaking release and close out
 
-Build and inspect the source distribution, commit with the Plan 6 and Mina intention trailers, and
+Set the selected version in `shibuya-pgmq-adapter/shibuya-pgmq-adapter.cabal`, date both
+changelogs, and verify dependency resolution without local source overrides. Build and inspect
+the source distribution, commit with the Plan 6 and Mina intention trailers, and
 publish/tag only the reviewed commit. Verify Hackage metadata and tag independently. Re-run at
 least the primary first-party consumer's dependency resolution and structured DLQ test against the
 published adapter rather than a local path.
@@ -289,10 +401,15 @@ marking the plan complete.
 
 ## Concrete Steps
 
-Run repository commands from the repository root. Gate G0 starts with read-only checks:
+Run repository commands from the repository root. Cabal checks require GHC 9.12 and PostgreSQL
+binaries (`initdb`, `pg_ctl`, `postgres`) on PATH; enter `nix develop` if needed. The test harness
+in `shibuya-pgmq-adapter/test/TmpPostgres.hs` creates its own temporary database and installs
+PGMQ, so no existing service or production queue is required. Gate G0 starts with read-only checks:
 
 ```bash
 git status --short
+mori registry list
+mori registry search shibuya-pgmq-adapter
 curl -fsSL https://hackage.haskell.org/package/shibuya-pgmq-adapter/preferred.json
 git ls-remote --tags https://github.com/shinzui/shibuya-pgmq-adapter.git
 mori path mori://shinzui/shibuya-pgmq-adapter/okf/improvement-requests/concepts/IR-1
@@ -306,7 +423,7 @@ empty. Resolve each consumer with Mori and inspect only its reported project pat
 Keiro consumer, confirm its bounds and structured-field tests; do not rely on the authoring-time
 0.13 result.
 
-Capture a baseline from the exact dual-write tag without switching the active checkout:
+Capture the historical release baseline without switching the active checkout:
 
 ```bash
 baseline_root=$(mktemp -d /tmp/shibuya-pgmq-dlq-removal.XXXXXX)
@@ -322,6 +439,14 @@ If the actual dual-write tag is not `v0.14.0.0`, revise the plan first and use t
 The temporary worktree is read-only baseline evidence. Remove it only after resolving the exact
 path with `git worktree list`; do not use a broad glob.
 
+After adding the three benchmark encoders in M1, but before removing the production field,
+capture the immediate baseline from the active tree in the same shell:
+
+```bash
+cabal bench dlq-payload-bench \
+  --benchmark-options="--csv $baseline_root/pre-removal.csv --stdev 5 --timeout 30 +RTS -T -RTS"
+```
+
 After implementation, build and test the active tree:
 
 ```bash
@@ -329,14 +454,16 @@ cabal build all --enable-tests --enable-benchmarks
 PGMQ_TEST_SKIP_DB=1 cabal test shibuya-pgmq-adapter-test \
   --enable-tests \
   --test-show-details=direct
-cabal test shibuya-pgmq-adapter-test \
+env -u PGMQ_TEST_SKIP_DB cabal test shibuya-pgmq-adapter-test \
   --enable-tests \
   --test-show-details=direct
 cabal bench dlq-payload-bench \
-  --benchmark-options="--baseline $baseline_root/dual-write.csv --stdev 5 --timeout 30 +RTS -T -RTS"
+  --benchmark-options="--baseline $baseline_root/pre-removal.csv --stdev 5 --timeout 30 +RTS -T -RTS"
 ```
 
-The test transcript ends with zero failures. The benchmark reports smaller structured-only output;
+The full test transcript ends with zero failures and no database examples skipped; the earlier
+`PGMQ_TEST_SKIP_DB=1` pass intentionally skips them and cannot satisfy database acceptance.
+The benchmark reports smaller production output with unchanged control lengths;
 summarize the measurements rather than committing machine-specific CSV files.
 
 Validate docs and repository state:
@@ -357,7 +484,9 @@ nix flake check
 git diff --check
 ```
 
-All commands exit zero. Use a Conventional Commit with an explicit breaking marker and both active
+All commands must exit zero before release. The existing Mori improvement-request failure
+recorded in Surprises & Discoveries must first be resolved; this review does not waive it.
+Use a Conventional Commit with an explicit breaking marker and both active
 trailers:
 
 ```text
@@ -378,8 +507,9 @@ structured DLQ acceptance test. Record exact package versions and results in thi
 
 Gate G0 is acceptance-critical. The plan cannot progress merely because the code change is small.
 Plan 5 and IR-1 are complete under a tagged, published dual-write release. The inventory names all
-known registered and first-party consumers, and every known deployed/target consumer prefers the
-structured fields, handles old rows, and has executable evidence. A dated maintainer Decision Log
+known registered and first-party consumers, with source-backed non-reader classifications. Every
+known deployed/target DLQ reader prefers
+the structured fields, handles old rows, and has executable evidence. A dated maintainer Decision Log
 entry explicitly opens the gate and selects the breaking version.
 
 After implementation, a new real PGMQ DLQ row for the representative application reason satisfies:
@@ -485,6 +615,17 @@ Readers must support historical schemas for at least their queue retention horiz
 the documented SQL projection or equivalent typed logic, but the adapter does not expose a DLQ
 decoder and does not mutate existing rows.
 
-The focused `dlq-payload-bench` from Plan 5 is the performance interface. It must retain stable
-benchmark names for dual-write baseline comparison and add structured-only names if necessary.
-Benchmark fixtures may construct the old JSON shapes for comparison; production code must not.
+The focused `dlq-payload-bench` from Plan 5 is the performance interface. Retain stable
+`legacy` and `dual-write` control names and compare the new `production` name against the
+immediate pre-removal CSV. Only `production` calls `mkDlqPayload`; the two historical shapes
+are constructed explicitly in benchmark/test fixtures and never in production code.
+
+
+## Revision Notes
+
+2026-10-25: Reviewed against the current source, published adapter versions/tags, Mori dependents,
+ADR 0001, and PostgreSQL fixtures. Kept G0 closed for Keiro's required legacy decoder, clarified
+that removal is optional cleanup, refreshed version selection and consumer classification, and
+made benchmark controls, physical-size comparisons, mixed-history coverage, and database gating
+explicit. Recorded the existing Mori metadata validation failure without changing unrelated files.
+The original plan had no provenance block, so its authoring model and prior reviews are unknown.
