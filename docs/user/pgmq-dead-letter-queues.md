@@ -246,11 +246,12 @@ topicDeadLetter  :: RoutingKey -> Bool -> DeadLetterConfig
 
 ## Browse, fetch, and redrive (implementation preview)
 
-`Shibuya.Adapter.Pgmq.DeadLetter` provides an in-process API. While the upstream
-inspection API is unreleased, its exports and tests require the manual Cabal flag
-`-fdlq-admin` and the temporary source project recorded in [plan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md).
-The normal build retains released dependencies. Released-dependency and measured
-performance acceptance remain pending; this preview is not a completed release.
+`Shibuya.Adapter.Pgmq.DeadLetter` provides an in-process API. Its exports and tests
+require the manual Cabal flag `-fdlq-admin`. The inspection statements are available
+in the released [`pgmq-hs`](mori://shinzui/pgmq-hs) 0.7.0.0 packages; no temporary
+source project is needed.
+Measured performance acceptance remains pending in
+[plan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md).
 
 Register each managed **physical** DLQ and its permitted source queues. The API
 never discovers or creates queues. `registrationFromAdapterConfig` derives a

@@ -48,7 +48,7 @@ MIT. See package `cabal` files for details.
 The in-process `Shibuya.Adapter.Pgmq.DeadLetter` API supports explicitly registered
 DLQs, bounded non-destructive browse/fetch, mixed historical envelopes and gated
 atomic redrive. New adapter writes always preserve source identity. The API is
-currently guarded by the manual `dlq-admin` Cabal flag pending the upstream
-inspection release and [plan 9 acceptance](docs/plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md).
+currently guarded by the manual `dlq-admin` Cabal flag pending
+[plan 9 acceptance](docs/plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md).
 See the [embedding and operator guide](docs/user/pgmq-dead-letter-queues.md#browse-fetch-and-redrive-implementation-preview)
 for pool ownership, source mappings, defaults and recovery guarantees.

@@ -2,13 +2,15 @@
 
 ## Unreleased
 
+- Require the [`pgmq-hs`](mori://shinzui/pgmq-hs) 0.7.0.0 package family (`pgmq-core`, `pgmq-hasql`,
+  `pgmq-effectful`, and `pgmq-migration`) across the adapter, tests, example,
+  and benchmarks. Inspection statements are now available from Hackage.
 - Add `original_queue` to adapter-produced DLQ envelopes in both metadata modes,
   using the new `mkDlqPayloadForQueue`; preserve `mkDlqPayload` and reason fields.
 - Add a preview in-process `Shibuya.Adapter.Pgmq.DeadLetter` API for registered,
   non-destructive browse/fetch and default-disabled transactional redrive. The
-  temporary manual `dlq-admin` Cabal flag requires unreleased upstream inspection
-  sources. Released-dependency and numeric performance acceptance remain open
-  in plan 9; this API is not yet part of the default build.
+  manual `dlq-admin` Cabal flag keeps this API opt-in pending plan 9 acceptance;
+  numeric performance acceptance remains open.
 
 ## 0.17.0.0 — 2026-10-25
 
