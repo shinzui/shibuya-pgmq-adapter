@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.17.0.0 — 2026-10-25
+
+### Breaking Changes
+
+- Require `shibuya-core ^>=0.11.0.0` across the library, tests, example, and
+  benchmarks. The example also requires `shibuya-metrics ^>=0.11.0.0`.
+  This adopts the extended configuration, processor metrics, and paused-state
+  API from `mori://shinzui/shibuya`.
+
+### Other Changes
+
+- Construct lifecycle test configurations from `defaultAppConfig` so the new
+  metrics-detail field receives its default value.
+- Include the existing ephemeral PostgreSQL test cleanup repair, which uses
+  stable per-user temporary roots.
+
 ## 0.16.1.0 — 2026-09-21
 
 ### Reliability
