@@ -28,6 +28,12 @@ created with commit `6e99c40`; they are no longer current CLI options. To select
 21 encoding pairs upfront, pass `--encoding-pairs 21` to the full runner.
 Cleanup preserved every recorded result and all numeric limits.
 
+The current runner corrects the oversized `ack-fifo` source fixture to 500,000
+rows for all three variants. Its full-duration validation collected 46,455
+acknowledgements with 445,360 rows remaining; details are under “FIFO fixture
+correction” below. The complete result tables preserve the historical
+three-million-row configuration and are not rewritten by this fixture change.
+
 ## Retained complete result
 
 | Gate family | Passed / required |
@@ -489,3 +495,25 @@ regression isolated. The four short original-binary diagnostics in
 `.dev/dlq-fifo-aa-diagnostic/` depleted their 100k-row queues and all report
 `valid=false`; they are excluded from quantitative conclusions. No acceptance
 matrix was rerun, no production source changed, and no numeric limit was waived.
+
+
+## FIFO fixture correction
+
+The benchmark's default `ack-fifo` source count was excessive. Grouped-head
+selection scans the whole source before choosing heads; three million rows
+produced only about 8,400 acknowledgement samples per minute. Change the default
+to a fixed 500,000 rows, identically for original, matched and candidate. The
+source count was not prescribed by plan 9. Keep the four workers, 50-row batch,
+100 groups, 10-KB bodies, pools, warmup/sample durations and all numeric limits.
+Existing exact-argument resumption cannot reuse the old larger-fixture samples.
+
+A fixed three-way diagnostic at two seconds warmup and fifteen seconds sampling
+produced 12,816 / 12,664 / 12,563 original/matched/candidate acknowledgements,
+with valid nondepleted queues. Their p95 values were respectively
+39.458 / 44.166 / 43.334 microseconds. A candidate validation at the prescribed
+ten-second warmup and sixty-second sample produced **46,455 observations**,
+**445,360 remaining rows**, p95 **42.375 microseconds**, and `valid=true`.
+This fixes unnecessary fixture cost and sample starvation without a production
+change. These targeted checks validate the fixture, not bootstrap acceptance of
+a new complete paired matrix. All 12 checker tests pass; no full matrix was rerun.
+Artifacts and exact arguments are retained in `.dev/dlq-fifo-focused/`.

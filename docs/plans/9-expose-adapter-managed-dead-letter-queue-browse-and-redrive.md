@@ -467,3 +467,16 @@ GIN FIFO index does not change that plan. This explains expensive dequeue work,
 not a proven cause of the acknowledgement-tail difference. See the measurement
 report for exact evidence and excluded depleted diagnostics. No production
 change, full benchmark rerun, or acceptance waiver is made.
+
+
+FIFO fixture correction, 2026-10-27: fix the oversized benchmark source rather
+than extending the expensive experiment. `scripts/check-dlq-performance.py` now
+uses 500,000 source rows for `ack-fifo` on original, matched and candidate; the
+plan did not prescribe the prior three-million-row source count. All worker,
+batch/group/body, pool, duration and numeric requirements are unchanged. Exact
+argument matching prevents reuse of the old larger-fixture samples. The short
+three-way diagnostic produced >12,500 valid observations per run in 15 seconds;
+the prescribed 10s/60s candidate validation produced 46,455 observations with
+445,360 rows remaining, about 5.5 times the former sample density. All 12 checker
+tests pass. See `.dev/dlq-fifo-focused/` and the performance report. This bounded
+fix changes no production code and makes no new full-matrix acceptance claim.

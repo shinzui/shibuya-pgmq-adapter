@@ -268,14 +268,16 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--smoke", action="store_true", help="short diagnostic; always INCONCLUSIVE")
     parser.add_argument("--resume-from", type=Path, help="retain every matching measurement from a finished parent")
-    parser.add_argument("--case-seed-count", dest="case_seed_counts", action="append", default=[], help="fixed source fixture SCENARIO=ROWS (default fifo-load-one=100000)")
+    parser.add_argument("--case-seed-count", dest="case_seed_counts", action="append", default=[], help="fixed source fixture SCENARIO=ROWS (defaults ack-fifo=500000, fifo-load-one=100000)")
     parser.add_argument("--encoding-pairs", type=int, default=7, help="fixed encoding pair count, chosen before measurement")
     args = parser.parse_args()
     if not args.smoke and (args.pairs < 7 or args.encoding_pairs < 7 or args.warmup_seconds < 10 or args.sample_seconds < 60):
         parser.error("acceptance requires >=7 pairs, >=10s warmup and >=60s samples")
     if args.pairs < 1 or args.ack_one_pairs < 1 or args.encoding_pairs < 1 or args.warmup_seconds < 0 or args.sample_seconds < 1 or args.seed_count < 1000:
         parser.error("invalid experiment size")
-    overrides = {} if args.smoke else {"fifo-load-one": 100_000}
+    # FIFO head selection scans the whole source on each read. Enough backlog
+    # for the interval is required; millions of extra rows only starve sampling.
+    overrides = {} if args.smoke else {"ack-fifo": 500_000, "fifo-load-one": 100_000}
     for override in args.case_seed_counts:
         name, separator, value = override.partition("=")
         if not separator or name not in (*SCENARIOS, "ack-load-one", "ack-load-fifty", "fifo-load-one", "fifo-load-fifty") or not value.isdecimal() or int(value) < 1000:

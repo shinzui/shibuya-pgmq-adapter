@@ -291,9 +291,18 @@ instrumentation uses `clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)` rather than th
 host runtime's microsecond-quantized clock. Other platforms retain the GHC clock.
 
 
+The `ack-fifo` worker case defaults to a 500,000-row source fixture
+(`--case-seed-count ack-fifo=500000`) on original, matched and candidate runs.
+Its whole-queue grouped-head query makes the former 3,000,000-row default an
+expensive way to collect very few acknowledgement observations. The smaller
+fixture increases sample density while retaining enough work for the interval;
+queue depletion still invalidates any run. Worker count, batch/group/body sizes,
+pools, durations and numeric limits are unchanged.
+
 The batch-size-one FIFO operator case defaults to a 100,000-row source fixture
 (`--case-seed-count fifo-load-one=100000`), while keeping its 100,000-row DLQ.
-Other worker source fixtures retain `--seed-count`. This avoids spending the
+Other worker source fixtures, apart from `ack-fifo` above, retain `--seed-count`.
+This avoids spending the
 whole interval scanning a multi-million-row source while missing the minimum
 latency observation count; every run must still prove no depletion and >=1,000
 observations.
