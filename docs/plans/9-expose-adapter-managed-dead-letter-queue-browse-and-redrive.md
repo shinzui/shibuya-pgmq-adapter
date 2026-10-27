@@ -49,14 +49,14 @@ Completion also requires measured performance acceptance. Compare existing worke
 - [x] M1 — Released PGMQ 0.7.0.0 and Shibuya core 0.12.0.0 support the unflagged producer-to-browse/fetch path (203 PostgreSQL examples, zero failures). On 2026-10-27, all seven worker workloads completed immutable original/matched/candidate controls in `.dev/dlq-release-fine-clock/`: 21 pairs for `ack-one`, seven elsewhere, with exact sources, dependencies, instrumentation, environment and raw measurements retained. Source/reason fields are exact. Numeric regression acceptance remains M4, including the fixed FIFO extension.
 - [x] M2 — Bounded browse/fetch, historical decoding and explicit physical registrations verified against released PGMQ 0.7.0.0 in the normal unflagged PostgreSQL suite on 2026-10-26. Tests compare all seven raw row fields, preserve invisible/malformed rows, cover 500-row lookahead, reject invalid requests before I/O, and verify separate-pool deadlines and setting cleanup.
 - [x] M3 — Default-off row-locked delete/send transactions verified on 2026-10-26 against released PGMQ 0.7.0.0, without a flag or temporary project. The clean final correctness suite passed 203 examples with zero failures, including 20 administration scenarios covering saved/missing/null headers, null payloads, normal handler input, concurrency, response-discard retry, rollback/recovery, cancellation, authorization and distinct topic fan-out copies.
-- [ ] M4 — Implementation, operator documentation, durable records and final clean released-dependency checks are complete. The full retained performance result passes 197/198 gates; original-control FIFO p95 remains 1.136174 against the unchanged 1.10 limit. The 21-pair extension was interrupted for immediate finalization and is INCONCLUSIVE. Full numeric acceptance remains open.
+- [ ] M4 — Release validation completed: build, 203 PostgreSQL examples, 12 checker tests and package metadata checks pass. The corrected seven-triplet FIFO experiment plus unchanged retained evidence gives 196/198 numeric gates passing. FIFO original/matched p95 bounds are 1.106857/1.172465 versus 1.10. No further benchmark run or waiver is claimed.
 
 Current release dependency state: Hackage publishes `pgmq-hasql 0.7.0.0` with
 `Pgmq.Hasql.Statements.Inspection`; upstream tag `v0.7.0.0` resolves to
 `88afb93802f790c1ecfbd3ed8bcce196c4430d13`. The normal build requires the released
 family and Shibuya core 0.12.0.0, with the transitional administration flag removed.
 The fixed pre-feature source remains `e06e64b268055aca4eff78caabd1b0eb73aa1cd1`.
-Only full performance acceptance remains open; no release has been published.
+Final handoff and actual numeric results are recorded below; no release has been published.
 
 ## Surprises & Discoveries
 
@@ -94,45 +94,33 @@ Only full performance acceptance remains open; no release has been published.
 
 ## Outcomes & Retrospective
 
-The normal-build browse/fetch and default-off atomic redrive implementation is
-complete using released PGMQ 0.7.0.0 and Shibuya core 0.12.0.0. Final clean
-validation on 2026-10-27 in `dist-dlq-release-final` built every component and
-passed all 203 PostgreSQL examples with zero failures, including 20 administration
-scenarios and the compiled public embedding example. Thirteen Python acceptance
-tests and capability, improvement-request and strict friction profile/log checks
-pass. Final logs are `.dev/dlq-release-final-build.log`,
-`.dev/dlq-release-final-test.log` and `.dev/dlq-release-final-haddock.log`.
+The normal-build DLQ API is implemented with released PGMQ 0.7.0.0 and Shibuya
+core 0.12.0.0. Final validation builds all components and passes 203 PostgreSQL
+examples with zero failures, all 12 checker tests, and the changed bundle checks.
+`cabal check` reports no errors or warnings. The 0.17.0.0 source package is
+`.dev/dlq-release-package/shibuya-pgmq-adapter-0.17.0.0.tar.gz`. Prior Haddock
+validation remains applicable because production Haskell/Cabal source hashes
+are unchanged. No package or tag has been published.
 
-Performance acceptance is incomplete: the complete retained result passes
-197/198 gates. The sole unresolved gate is original-control FIFO p95 (median
-1.082919, upper95 1.136174, unchanged limit 1.10). The complete encoding extension
-passes all 60 gates. All fixed-rate operator-load, read/depth and retained-heap
-gates pass in the recorded controlled configuration. After the user requested
-immediate finalization, the owned FIFO extension was interrupted after three
-additional measurements and retained as INCONCLUSIVE. Its partial data cannot
-close acceptance. No scope waiver or release publication is claimed.
+The corrected FIFO experiment completed seven triplets, with 21 fresh and 344
+reused measurements. The final numeric result is 196/198 PASS. Original/matched
+FIFO p95 upper bounds are 1.106857/1.172465 versus the unchanged 1.10 limit;
+median ratios are 1.026316/0.899244. The fixture correction improved sampling but
+did not demonstrate acceptable p95 bounds or isolate a latency regression. The
+[report](../performance/9-dlq-browse-and-redrive.md) and
+[snapshot](../performance/9-dlq-browse-and-redrive-gates.json) preserve actual
+results and previous failed evidence. No full acceptance or waiver is claimed.
 
-The [measurement report](../performance/9-dlq-browse-and-redrive.md) and
-[committed snapshot](../performance/9-dlq-browse-and-redrive-gates.json) retain
-all complete paired ratios, bounds, source/dependency identities and artifact
-locations, including failed/interrupted histories. Production Haskell/Cabal/Nix
-files remain identical to measured candidate `d4dfba1`. IR-3 remains proposed
-until complete acceptance. The durable decisions are distilled in
-[ADR 0002](../adr/0002-managed-dlq-administration.md).
+The user's goal was to release the feature with confidence about existing worker
+performance. Expanding benchmark machinery, treating an unproven hypothesis as
+a fix, and repeating long experiments failed that goal and consumed excessive
+time. Benchmark work has stopped; no further run is scheduled.
 
 FRIC-1 is resolved by the published inspection API. FRIC-2 is accepted with
 isolated Cabal build directories per dependency/optimization configuration.
-FRIC-3 is accepted with an explicitly measured benchmark clock; nanosecond units
-do not guarantee nanosecond resolution. Fixture maintenance and clock precision
-must be controlled before starting another long experiment. The investigation
-and repeated experiments took too long; completed implementation and unresolved
-release criteria should have been communicated with an explicit elapsed-time
-and remaining-time estimate earlier.
-
-`mori validate` exits zero with a pre-existing schema-hash warning:
-recorded `sha256:d29ca03286afa92b7589d09b7a6d98ad8e39d11b255a4b8751f3327b0722fba3`
-versus embedded `sha256:dcb19e2312e790bad14e622cc98a1281cd2298c5b564a2f0d0534d3c718d8803`.
-No unrelated registry/schema migration is included.
+FRIC-3 is accepted with the shared benchmark-only raw monotonic clock. Durable
+administration decisions and measurement constraints are in
+[ADR 0002](../adr/0002-managed-dlq-administration.md).
 
 ## Context and Orientation
 
@@ -480,3 +468,16 @@ the prescribed 10s/60s candidate validation produced 46,455 observations with
 445,360 rows remaining, about 5.5 times the former sample density. All 12 checker
 tests pass. See `.dev/dlq-fifo-focused/` and the performance report. This bounded
 fix changes no production code and makes no new full-matrix acceptance claim.
+
+
+Release-validation handoff, 2026-10-27: finished the corrected seven-pair FIFO
+experiment without extending it. All 21 new measurements are valid; all 344
+unchanged measurements are reused and every one of the 198 gates is recomputed.
+Both FIFO p95 bounds fail the 1.10 limit (original 1.106857, matched 1.172465),
+while their median ratios are 1.026316 and 0.899244. The fixture-size correction
+fixed sampling cost, not the unexplained tail variation. Treating that hypothesis
+as a latency fix and then spending another experiment on it repeated the earlier
+execution mistake. No sample is discarded based on observed background activity.
+Final build, 203 tests, 12 checker tests and `cabal check` pass. Record actual
+results in the performance report/snapshot and stop benchmark work; no full
+acceptance or release publication is claimed.

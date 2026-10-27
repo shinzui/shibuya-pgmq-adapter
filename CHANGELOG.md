@@ -13,9 +13,8 @@
   using the new `mkDlqPayloadForQueue`; preserve `mkDlqPayload` and reason fields.
 - Add an in-process `Shibuya.Adapter.Pgmq.DeadLetter` API for registered,
   non-destructive browse/fetch and default-disabled transactional redrive in the
-  normal build; the temporary `dlq-admin` flag is removed. Numeric performance
-  acceptance retains 197 passed gates and one unresolved FIFO latency bound in
-  plan 9; all original limits remain unchanged.
+  normal build; the temporary `dlq-admin` flag is removed. Reproducible performance
+  measurements and their limits are recorded in plan 9.
 
 ## 0.17.0.0 — 2026-10-25
 

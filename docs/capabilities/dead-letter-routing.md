@@ -2,7 +2,7 @@
 title: "Dead-letter routing"
 type: Capability
 description: "Opt-in dead-letter handling that moves a failed or over-retried message to a target queue in one PostgreSQL transaction, preserving a queryable reason code and optional detail alongside the compatibility rendering."
-timestamp: "2026-10-27T13:16:11Z"
+timestamp: "2026-10-27T14:22:25Z"
 generated:
   by: codex/1.0
   at: "2026-08-10T21:15:04Z"
@@ -133,7 +133,7 @@ embedding example and documents queue recreation and per-copy topic semantics.
 
 The [measurement report](../performance/9-dlq-browse-and-redrive.md) and
 [committed gate snapshot](../performance/9-dlq-browse-and-redrive-gates.json)
-retain 197 passed gates and one unresolved FIFO worker latency confidence bound.
+retain 196 passed gates and two failed FIFO worker latency confidence bounds.
 All four fixed-rate operator-load comparisons, encoding, ordinary/unlogged
 read/depth and retained-heap gates pass in the recorded controlled configuration.
 Overall performance acceptance remains open, with original limits unchanged;

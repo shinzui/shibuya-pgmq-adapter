@@ -6,7 +6,7 @@ description: >-
   structured reason code, reason detail, attempt count, and original queue; fetch one entry —
   plus an explicit, gated redrive operation, so an operator can see why messages died and
   safely return them to their source queue.
-timestamp: 2026-10-27T13:16:11Z
+timestamp: 2026-10-27T14:22:25Z
 requestId: IR-3
 status: proposed
 origin: mori://shinzui/keiro-ui
@@ -28,8 +28,8 @@ Implementation is available in the normal build with released PGMQ 0.7.0.0:
 browse/fetch and default-off atomic redrive are covered by the real-database
 suite and the compiled public embedding example. The request remains proposed
 pending complete plan acceptance: [plan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md)
-records 197/198 performance gates passing, with one FIFO worker latency bound
-unresolved. The [gate snapshot](../performance/9-dlq-browse-and-redrive-gates.json)
+records 196/198 performance gates passing, with both FIFO worker latency
+confidence bounds failing the original limit. The [gate snapshot](../performance/9-dlq-browse-and-redrive-gates.json)
 retains all ratios and limits. No release or performance waiver is claimed.
 
 ## Context

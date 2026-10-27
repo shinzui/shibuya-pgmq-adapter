@@ -1,8 +1,8 @@
 {
   "status": "FAIL",
-  "note": "Implementation complete; performance acceptance remains open. The FIFO extension was interrupted after three additional measurements when the user requested immediate finalization. Those partial samples are not acceptance evidence.",
-  "sourceResult": ".dev/dlq-release-encoding-extension/result.json",
-  "sourceResultSha256": "cf3dfb9df248318dc931906b293754346ad8c4f9b923ed928357f876792fe0f0",
+  "note": "Corrected FIFO fixture validation completed all seven original/matched/candidate triplets. 196/198 numeric gates pass; both FIFO p95 confidence bounds exceed the unchanged 1.10 limit. No additional benchmark runs or waiver.",
+  "sourceResult": ".dev/dlq-release-validated-fifo/result.json",
+  "sourceResultSha256": "5141003dbe3d080716b0199d0e6f40810bcf5cfdbfa0afe20bd530b41b1c0639",
   "environment": {
     "baselineCommit": "e06e64b268055aca4eff78caabd1b0eb73aa1cd1",
     "candidateCommit": "d4dfba17d0be431ed6b7f7e30ad7f8722b4166d8",
@@ -24,26 +24,19 @@
       "warmup_seconds": 10,
       "sample_seconds": 60,
       "seed_count": 3000000,
-      "output": ".dev/dlq-release-resumed",
+      "output": ".dev/dlq-release-validated-fifo",
       "smoke": false,
-      "resume_from": ".dev/dlq-release-fine-clock",
+      "resume_from": ".dev/dlq-release-encoding-extension",
       "case_seed_counts": {
+        "ack-fifo": 500000,
         "fifo-load-one": 100000
       },
-      "extend_worker_from": null,
-      "worker_scenario": null,
-      "worker_pairs": 21
+      "encoding_pairs": 21
     },
     "hardware": "hw.model: Mac17,15\nhw.memsize: 274877906944\nmachdep.cpu.brand_string: Apple M5 Ultra",
-    "orchestratorCommit": "b85da6c1cd4a36f85d7f7eaafac7c68474e431cf",
-    "resumedFrom": ".dev/dlq-release-fine-clock",
-    "parentResultSha256": "dbf889f95a4d80fe1ffd2b0d4d71dba710b3467160542c4b2f34c35e5cd30ee0",
-    "extension": {
-      "kind": "encoding",
-      "existingPairs": 7,
-      "fixedTotalPairs": 21,
-      "parent": ".dev/dlq-release-resumed"
-    }
+    "orchestratorCommit": "e3cc194a145da6fe73354f0961c0ef4e01c18971",
+    "resumedFrom": ".dev/dlq-release-encoding-extension",
+    "parentResultSha256": "cf3dfb9df248318dc931906b293754346ad8c4f9b923ed928357f876792fe0f0"
   },
   "bootstrapSeed": 910262026,
   "bootstrapResamples": 10000,
@@ -384,96 +377,96 @@
     {
       "name": "ack-fifo/original/throughput",
       "ratios": [
-        0.9500579159871512,
-        0.9765726631421221,
-        1.0104495122488626,
-        0.9892424104934144,
-        1.0117130315115965,
-        0.9883294802220987,
-        1.0058802987940016
+        1.0165238475881029,
+        1.0179372037220586,
+        1.022150936931909,
+        1.0023419479808764,
+        1.040615162506448,
+        0.8787524950831221,
+        0.9084886292493001
       ],
-      "median": 0.9892424104934144,
-      "upper95": 1.0104495122488626,
+      "median": 1.0165238475881029,
+      "upper95": 1.022150936931909,
       "limit": 1.0526315789473684,
       "status": "PASS"
     },
     {
       "name": "ack-fifo/original/p95",
       "ratios": [
-        1.1361738674046329,
-        0.8317073170731708,
-        1.0829188221249502,
-        0.9412451790633608,
-        1.1494630623958526,
-        1.0909995389356693,
-        1.0791871741143217
+        1.106856545336852,
+        1.0689912536443147,
+        0.9800059077650186,
+        1.026315789473684,
+        1.2604,
+        0.8937887323943663,
+        0.8391076923076923
       ],
-      "median": 1.0829188221249502,
-      "upper95": 1.1361738674046329,
+      "median": 1.026315789473684,
+      "upper95": 1.106856545336852,
       "limit": 1.1,
       "status": "FAIL"
     },
     {
       "name": "ack-fifo/original/allocation",
       "ratios": [
-        0.9513016443501219,
-        0.9517723875644087,
-        0.9436530266166744,
-        0.9523748270742787,
-        0.9552166013663711,
-        0.940105876296066,
-        0.9534043902691337
+        0.9518651079333088,
+        0.9542247790602899,
+        0.9521975912357432,
+        0.953497998994497,
+        0.9547607897507185,
+        0.9523732956952377,
+        0.9523450329833361
       ],
-      "median": 0.9517723875644087,
-      "upper95": 0.9534043902691337,
+      "median": 0.9523732956952377,
+      "upper95": 0.9542247790602899,
       "limit": 1,
       "status": "PASS"
     },
     {
       "name": "ack-fifo/matched/throughput",
       "ratios": [
-        1.0096004370429243,
-        0.9882564998856704,
-        0.9867658356590692,
-        1.0012121712786077,
-        1.0095085091221114,
-        1.0118630358457625,
-        0.9941011637528291
+        0.9898361146882877,
+        1.018664808835469,
+        0.9280972906705551,
+        0.9839240782039845,
+        1.0140257390964984,
+        0.6049686656757193,
+        1.0655622997504375
       ],
-      "median": 1.0012121712786077,
-      "upper95": 1.0096004370429243,
+      "median": 0.9898361146882877,
+      "upper95": 1.018664808835469,
       "limit": 1.0526315789473684,
       "status": "PASS"
     },
     {
       "name": "ack-fifo/matched/p95",
       "ratios": [
-        1.0772937024972857,
-        0.9715099715099716,
-        1.0652477064220183,
-        0.945579737418912,
-        1.1594994630433768,
-        0.9818304907077811,
-        0.8727487684729063
+        0.892874357326478,
+        1.106649604017771,
+        0.872,
+        0.8992437129798527,
+        1.17246511627907,
+        0.4535507018496812,
+        1.2986190476190476
       ],
-      "median": 0.9818304907077811,
-      "upper95": 1.0772937024972857,
+      "median": 0.8992437129798527,
+      "upper95": 1.17246511627907,
       "limit": 1.1,
-      "status": "PASS"
+      "status": "FAIL"
     },
     {
       "name": "ack-fifo/matched/allocation",
       "ratios": [
-        0.9565936741537223,
-        0.9520714130591765,
-        0.9535352129386948,
-        0.95885612482891,
-        0.9499977009173903,
-        0.9467470517655724,
-        0.9617384728091222
+        0.9523334152842688,
+        0.9537111093386808,
+        0.9515498076380018,
+        0.9532380119309112,
+        0.9543753179614473,
+        0.9474907946129338,
+        0.953906702062131
       ],
-      "median": 0.9535352129386948,
-      "upper95": 0.95885612482891,
+      "median": 0.9532380119309112,
+      "upper95": 0.953906702062131,
       "limit": 1,
       "status": "PASS"
     },
@@ -8320,5 +8313,115 @@
     "shibuya-pgmq-adapter-bench/bench/Bench/Fifo.hs": "941d03b9ffdcddf8e208983c19b4f3ce06cbe66593964741a60ca60183687dc5",
     "shibuya-pgmq-adapter-bench/bench/Bench/Ack.hs": "1791319d3463e46d3dc089bfee70c0b4b8fcde3fe08a5ad8b4167b0e55fcda5f",
     "shibuya-pgmq-adapter-bench/bench/Bench/Send.hs": "7cb841e801526b58bfb008e676a9cf5271e698f6f2fc4bc11927f02e339c31f6"
-  }
+  },
+  "measurementReuse": {
+    "new": 21,
+    "reused": 344
+  },
+  "priorFixtureResults": [
+    {
+      "sourceResult": ".dev/dlq-release-encoding-extension/result.json",
+      "sourceResultSha256": "cf3dfb9df248318dc931906b293754346ad8c4f9b923ed928357f876792fe0f0",
+      "status": "FAIL",
+      "fifoSourceRows": 3000000,
+      "gates": [
+        {
+          "name": "ack-fifo/original/throughput",
+          "ratios": [
+            0.9500579159871512,
+            0.9765726631421221,
+            1.0104495122488626,
+            0.9892424104934144,
+            1.0117130315115965,
+            0.9883294802220987,
+            1.0058802987940016
+          ],
+          "median": 0.9892424104934144,
+          "upper95": 1.0104495122488626,
+          "limit": 1.0526315789473684,
+          "status": "PASS"
+        },
+        {
+          "name": "ack-fifo/original/p95",
+          "ratios": [
+            1.1361738674046329,
+            0.8317073170731708,
+            1.0829188221249502,
+            0.9412451790633608,
+            1.1494630623958526,
+            1.0909995389356693,
+            1.0791871741143217
+          ],
+          "median": 1.0829188221249502,
+          "upper95": 1.1361738674046329,
+          "limit": 1.1,
+          "status": "FAIL"
+        },
+        {
+          "name": "ack-fifo/original/allocation",
+          "ratios": [
+            0.9513016443501219,
+            0.9517723875644087,
+            0.9436530266166744,
+            0.9523748270742787,
+            0.9552166013663711,
+            0.940105876296066,
+            0.9534043902691337
+          ],
+          "median": 0.9517723875644087,
+          "upper95": 0.9534043902691337,
+          "limit": 1,
+          "status": "PASS"
+        },
+        {
+          "name": "ack-fifo/matched/throughput",
+          "ratios": [
+            1.0096004370429243,
+            0.9882564998856704,
+            0.9867658356590692,
+            1.0012121712786077,
+            1.0095085091221114,
+            1.0118630358457625,
+            0.9941011637528291
+          ],
+          "median": 1.0012121712786077,
+          "upper95": 1.0096004370429243,
+          "limit": 1.0526315789473684,
+          "status": "PASS"
+        },
+        {
+          "name": "ack-fifo/matched/p95",
+          "ratios": [
+            1.0772937024972857,
+            0.9715099715099716,
+            1.0652477064220183,
+            0.945579737418912,
+            1.1594994630433768,
+            0.9818304907077811,
+            0.8727487684729063
+          ],
+          "median": 0.9818304907077811,
+          "upper95": 1.0772937024972857,
+          "limit": 1.1,
+          "status": "PASS"
+        },
+        {
+          "name": "ack-fifo/matched/allocation",
+          "ratios": [
+            0.9565936741537223,
+            0.9520714130591765,
+            0.9535352129386948,
+            0.95885612482891,
+            0.9499977009173903,
+            0.9467470517655724,
+            0.9617384728091222
+          ],
+          "median": 0.9535352129386948,
+          "upper95": 0.95885612482891,
+          "limit": 1,
+          "status": "PASS"
+        }
+      ]
+    }
+  ]
 }

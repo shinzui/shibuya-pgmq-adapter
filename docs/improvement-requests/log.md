@@ -1,6 +1,7 @@
 # Bundle Update Log
 
 ## 2026-10-27
+* **Update**: IR-3: preserve actual release-validation evidence: completed implementation, 203 passing examples, and two failed FIFO confidence bounds in the corrected experiment. No full acceptance or publication claimed.
 * **Update**: Record completed browse/fetch/default-off redrive implementation and compiled embedding evidence; retain proposed status because plan 9 has one unresolved performance gate and no published release.
 
 ## 2026-08-19

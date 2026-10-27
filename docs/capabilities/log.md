@@ -1,6 +1,7 @@
 # Capability catalog log
 
 ## 2026-10-27
+* **Update**: CAP-2: record final corrected-fixture validation accurately: 196/198 numeric gates pass; both FIFO p95 bounds fail. Correctness and package validation pass; no further benchmark run or latency-fix claim.
 * **Update**: Record the normal-build managed DLQ API, real two-copy topic test, and retained 197/198 performance results; keep the unresolved FIFO confidence bound and measured layout/configuration limits explicit.
 * **Update**: Enable managed DLQ administration in the normal build against released PGMQ 0.7.0.0; preserve default-off redrive and distinguish correctness evidence from pending numeric performance acceptance.
 

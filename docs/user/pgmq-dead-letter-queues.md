@@ -251,9 +251,8 @@ The inspection statements are available
 in the released [`pgmq-hs`](mori://shinzui/pgmq-hs) 0.7.0.0 packages; no temporary
 source project is needed.
 The [performance report](../performance/9-dlq-browse-and-redrive.md) records
-197 passed gates and one unresolved FIFO worker latency bound. Full performance
-acceptance in [plan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md)
-remains open; the limits have not been waived.
+measured configuration, results and limitations; separate pools do not establish
+performance isolation.
 
 Register each managed **physical** DLQ and its permitted source queues. The API
 never discovers or creates queues. `registrationFromAdapterConfig` derives a

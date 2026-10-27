@@ -2,18 +2,22 @@
 
 Plan: [ExecPlan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md).
 
-Status: **implementation complete; performance acceptance incomplete**.
-The complete retained matrix passes **197 of 198 gates**. The sole unresolved
-gate is original-control FIFO worker p95: median cost ratio **1.082919**,
-one-sided 95% upper bound **1.136174**, limit **1.10**. All numeric limits remain
-unchanged. The fixed FIFO extension was interrupted after three additional
-measurements when the user requested immediate finalization on 2026-10-27;
-its partial measurements do not replace the seven-pair result or close M4.
+Status: **release validation completed; numeric performance check failed**.
+The corrected FIFO experiment completed all seven triplets (21 new measurements),
+reused 344 unchanged measurements, and recomputed all 198 gates: **196 PASS,
+2 FAIL**. Both failures are FIFO acknowledgement p95 upper bounds: original
+1.106857 and matched 1.172465, against the unchanged 1.10 limit. Paired median
+ratios are respectively 1.026316 and 0.899244. The smaller fixture fixed sampling
+cost but did not establish the required latency bounds; calling it a solution
+to latency variation was premature.
 
-The [committed gate snapshot](9-dlq-browse-and-redrive-gates.json) preserves all
-198 results, every paired ratio, medians, bounds, limits, dependency versions,
-measured source hashes and environment. It records FAIL honestly. Complete raw
-measurements and logs remain in the `.dev/` artifact directories below.
+The [gate snapshot](9-dlq-browse-and-redrive-gates.json) records every actual
+result, prior fixture results, source hashes and dependency identities. The full
+result is `.dev/dlq-release-validated-fifo/result.json`. All 192 unaffected gates
+are identical to their previously retained results. Background Finder, XProtect
+and Spotlight activity was observed during the later samples; its contribution
+was not isolated, so it is not a proven explanation or a basis for discarding
+samples. No further benchmark experiment or budget waiver is claimed.
 
 The measured candidate is `d4dfba17d0be431ed6b7f7e30ad7f8722b4166d8`,
 using released PGMQ 0.7.0.0 and Shibuya core 0.12.0.0. Subsequent changes affect
@@ -38,13 +42,13 @@ three-million-row configuration and are not rewritten by this fixture change.
 
 | Gate family | Passed / required |
 |---|---:|
-| Worker controls, including idle handle | 44 / 45 |
+| Worker controls, including idle handle | 43 / 45 |
 | Four fixed-rate operator-load comparisons | 8 / 8 |
 | Encoding timing and allocation | 60 / 60 |
 | Adapter versus raw reads | 60 / 60 |
 | Tenfold queue-depth scaling | 24 / 24 |
 | Five-minute retained heap | 1 / 1 |
-| Total | **197 / 198** |
+| Total | **196 / 198** |
 
 Confidence bounds use 10,000 bootstrap resamples of paired medians with seed
 910262026. Throughput ratios are control/candidate; latency ratios are
@@ -517,3 +521,11 @@ This fixes unnecessary fixture cost and sample starvation without a production
 change. These targeted checks validate the fixture, not bootstrap acceptance of
 a new complete paired matrix. All 12 checker tests pass; no full matrix was rerun.
 Artifacts and exact arguments are retained in `.dev/dlq-fifo-focused/`.
+
+
+Final handoff validation: all components build, the PostgreSQL suite passes
+203 examples with zero failures, all 12 checker tests pass, and `cabal check`
+reports no errors or warnings. Logs are `.dev/dlq-release-validation-build.log`
+and `.dev/dlq-release-validation-test.log`. Production source is unchanged from
+the measured candidate. These correctness/package checks do not turn the two
+failed numeric bounds into passes. Benchmark work has stopped.
