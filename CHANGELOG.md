@@ -1,36 +1,43 @@
 # Changelog
 
-## Unreleased
-
-- Require [`shibuya-core`](mori://shinzui/shibuya/packages/shibuya-core) and
-  [`shibuya-metrics`](mori://shinzui/shibuya/packages/shibuya-metrics) 0.12.0.0
-  across the adapter, tests, example, and benchmarks. PGMQ deliveries report
-  `DeliveryCurrent` through the new `Ingested.deliveryStatus` field.
-- Require the [`pgmq-hs`](mori://shinzui/pgmq-hs) 0.7.0.0 package family (`pgmq-core`, `pgmq-hasql`,
-  `pgmq-effectful`, and `pgmq-migration`) across the adapter, tests, example,
-  and benchmarks. Inspection statements are now available from Hackage.
-- Add `original_queue` to adapter-produced DLQ envelopes in both metadata modes,
-  using the new `mkDlqPayloadForQueue`; preserve `mkDlqPayload` and reason fields.
-- Add an in-process `Shibuya.Adapter.Pgmq.DeadLetter` API for registered,
-  non-destructive browse/fetch and default-disabled transactional redrive in the
-  normal build; the temporary `dlq-admin` flag is removed. Reproducible performance
-  measurements and their limits are recorded in plan 9.
-
-## 0.17.0.0 — 2026-10-25
+## 0.18.0.0 — 2026-10-27
 
 ### Breaking Changes
 
-- Require `shibuya-core ^>=0.11.0.0` across the library, tests, example, and
-  benchmarks. The example also requires `shibuya-metrics ^>=0.11.0.0`.
-  This adopts the extended configuration, processor metrics, and paused-state
-  API from `mori://shinzui/shibuya`.
+- Require [`shibuya-core`](mori://shinzui/shibuya/packages/shibuya-core) `^>=0.12.0.0`,
+  adopting its extended configuration, processor metrics, paused-state API, and
+  `Ingested.deliveryStatus` field. PGMQ deliveries report `DeliveryCurrent`,
+  preserving handler and acknowledgement behavior.
+- Require the [`pgmq-hs`](mori://shinzui/pgmq-hs) 0.7.0.0 package family
+  (`pgmq-core`, `pgmq-hasql`, and `pgmq-effectful`; tests also use `pgmq-migration`).
+
+### New Features
+
+- Expose `Shibuya.Adapter.Pgmq.DeadLetter` for explicitly registered,
+  non-destructive DLQ browse/fetch and default-disabled transactional redrive.
+  Redrive authorizes the source queue and atomically claims each DLQ row before
+  sending its original payload; concurrent calls and uncertain-commit retries
+  cannot duplicate that physical row's redrive.
+- Add `mkDlqPayloadForQueue` and include `original_queue` in adapter-produced
+  DLQ envelopes in both metadata modes. Preserve `mkDlqPayload` and existing
+  reason fields; historical and malformed envelopes remain inspectable.
 
 ### Other Changes
 
-- Construct lifecycle test configurations from `defaultAppConfig` so the new
-  metrics-detail field receives its default value.
-- Include the existing ephemeral PostgreSQL test cleanup repair, which uses
-  stable per-user temporary roots.
+- Use the published dependency releases without the transitional `dlq-admin` flag.
+- Require [`shibuya-metrics`](mori://shinzui/shibuya/packages/shibuya-metrics)
+  `^>=0.12.0.0` in the example, and align example/benchmark core and PGMQ bounds.
+- Extend PostgreSQL coverage for managed DLQs and consumer trace context;
+  preserve core configuration defaults in lifecycle fixtures and use stable
+  per-user temporary roots for ephemeral PostgreSQL cleanup.
+- Add reproducible worker, administration, and encoding performance comparisons.
+  Performance acceptance remains incomplete: 196 of 198 numeric gates pass;
+  FIFO acknowledgement p95 upper bounds are 1.106857 against the original
+  control and 1.172465 against the matched control, exceeding the 1.10 limit. See the
+  [performance report](docs/performance/9-dlq-browse-and-redrive.md).
+- Defer performance acceptance for this release by explicit user approval;
+  retain the failed bounds and unchanged numeric limits.
+- Consolidate the unpublished 0.17.0.0 changes into this release.
 
 ## 0.16.1.0 — 2026-09-21
 
