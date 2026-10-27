@@ -449,3 +449,43 @@ the full matrix and exact-sample resumption. All 12 remaining checker tests pass
 A replay in `.dev/dlq-cleanup-replay/` reused all 365 saved measurements and
 reproduced all 198 gate records exactly, with benchmark/build children forbidden.
 The recorded FIFO failure remains; no performance result changed.
+
+
+## Bounded FIFO latency investigation
+
+The failing metric measures only `message.ack.finalize AckOk`, excluding dequeue.
+The adapter's successful-acknowledgement implementation is unchanged from the
+pre-feature source: it serializes finalization, retries transient failures, and
+calls `deleteMessage`. Source-envelope encoding executes only for dead letters;
+constructing the idle admin handle starts no queries or threads. The dependency
+upgrade preserves the successful delete statement and grouped-head SQL (project
+`mori://shinzui/pgmq-hs`, tags `v0.6.1.1` and `v0.7.0.0`, paths
+`pgmq-hasql/src/Pgmq/Hasql/Statements/Message.hs` and
+`pgmq-migration/migrations/0004-upgrade-v1.12.0.sql`; artifact-level URIs pending).
+
+Across the seven complete FIFO runs, median per-run acknowledgement p50 is
+31.083 microseconds original, 30.833 matched, and 30.958 candidate. Original
+p95 alone ranges from 40.208 to 51.250 microseconds. The candidate/matched paired
+p95 median ratio is 0.981830 (upper95 1.077294). Candidate/original has median
+1.082919 and bootstrap median percentiles 5/95 of 0.941245/1.136174. Thus the
+complete data neither establish a positive p95 increase at the one-sided 95%
+level nor establish the required upper bound of 1.10. Calling the upper bound
+itself a measured 13.6% regression was incorrect. The original gate remains FAIL.
+
+The expensive worker operation is the existing grouped-head dequeue: its
+`GROUP BY`/`MIN(msg_id)` computes heads over the whole source queue before
+limiting selected heads. All three controls scan the three-million-row fixture,
+yielding only about 133–141 original acknowledgements/second. The fixture omits
+`createFifoIndex`, but that helper creates a GIN index on headers, which cannot
+serve this grouping expression. A disposable 100k-row EXPLAIN diagnostic confirms
+both with/without-GIN plans use a sequential scan of all 100k rows. Its complete
+plans are `.dev/dlq-fifo-query-diagnostic-fixed.log`. Do not infer an index speedup
+from those sequential observations; their cache state differs.
+
+This identifies an existing dequeue bottleneck and excessive fixture cost; it
+does not prove that scans caused the small acknowledgement-tail difference.
+That difference remains consistent with run variation, with no production DLQ
+regression isolated. The four short original-binary diagnostics in
+`.dev/dlq-fifo-aa-diagnostic/` depleted their 100k-row queues and all report
+`valid=false`; they are excluded from quantitative conclusions. No acceptance
+matrix was rerun, no production source changed, and no numeric limit was waived.

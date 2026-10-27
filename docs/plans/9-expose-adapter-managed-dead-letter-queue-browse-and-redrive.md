@@ -455,3 +455,15 @@ Cleanup validation: all 12 remaining checker tests pass. A resumption replay in
 one of the 198 gate records exactly, including the unresolved FIFO failure.
 The replay forbade benchmark/build subprocesses, so it started no database or
 new measurement. Production source and recorded evidence remain unchanged.
+
+
+Bounded investigation, 2026-10-27: trace the failing FIFO metric to unchanged
+`AckOk` finalization, compare matched dependencies and all saved distributions,
+and inspect the actual grouped-head SQL. The complete data do not establish a
+positive p95 increase at the one-sided 95% level, but still fail to establish the
+required <=1.10 upper bound. The 13.6% value is an uncertainty bound, not a measured
+regression. Actual grouping plans confirm full-source scans; adding the provided
+GIN FIFO index does not change that plan. This explains expensive dequeue work,
+not a proven cause of the acknowledgement-tail difference. See the measurement
+report for exact evidence and excluded depleted diagnostics. No production
+change, full benchmark rerun, or acceptance waiver is made.
