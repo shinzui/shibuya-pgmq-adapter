@@ -1,6 +1,7 @@
 # Capability catalog log
 
 ## 2026-10-27
+* **Update**: Record the normal-build managed DLQ API, real two-copy topic test, and retained 197/198 performance results; keep the unresolved FIFO confidence bound and measured layout/configuration limits explicit.
 * **Update**: Enable managed DLQ administration in the normal build against released PGMQ 0.7.0.0; preserve default-off redrive and distinguish correctness evidence from pending numeric performance acceptance.
 
 ## 2026-10-26

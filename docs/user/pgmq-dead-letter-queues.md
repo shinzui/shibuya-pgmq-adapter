@@ -250,8 +250,10 @@ topicDeadLetter  :: RoutingKey -> Bool -> DeadLetterConfig
 The inspection statements are available
 in the released [`pgmq-hs`](mori://shinzui/pgmq-hs) 0.7.0.0 packages; no temporary
 source project is needed.
-Measured performance acceptance remains pending in
-[plan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md).
+The [performance report](../performance/9-dlq-browse-and-redrive.md) records
+197 passed gates and one unresolved FIFO worker latency bound. Full performance
+acceptance in [plan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md)
+remains open; the limits have not been waived.
 
 Register each managed **physical** DLQ and its permitted source queues. The API
 never discovers or creates queues. `registrationFromAdapterConfig` derives a
@@ -265,8 +267,10 @@ database. The host owns and releases it; constructing `DeadLetterAdmin` does no
 I/O and starts no polling. Use finite connection and pool acquisition deadlines
 as well as the API's transaction-local statement and lock deadlines (defaults
 5000ms and 1000ms). Separate connections reserve worker pool capacity, but do not
-isolate PostgreSQL CPU, I/O or locks. No performance isolation claim is made until
-the numeric gates in plan 9 have actual retained evidence.
+isolate PostgreSQL CPU, I/O or locks. The four measured fixed-rate operator-load
+cases pass their throughput, latency and request-success limits in the report’s
+controlled database configuration. These measurements do not promise isolation
+under arbitrary traffic or validate partitioned queue performance.
 
 The following module compiles using public exports only; its source is also
 included in the normal test component as `DeadLetterExample`:

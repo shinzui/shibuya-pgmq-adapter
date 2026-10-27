@@ -6,13 +6,18 @@ generated:
   by: "codex-cli/gpt-6.1-sol"
   at: "2026-10-27T02:23:36Z"
 frictionId: FRIC-2
-status: logged
+status: "accepted"
 impact: detour
 kind: tooling
 origin: "mori://shinzui/shibuya-pgmq-adapter"
 affects: "https://github.com/haskell/cabal"
 plan: "docs/plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md"
 workaround: "Use --builddir=dist-dlq-release to rebuild local components against the current released dependency identities; .dev/dlq-final-build-clean.log retains the successful build."
+resolution: "Use a fresh Cabal build directory for each dependency and optimization configuration; isolated directories consistently compile against the intended package identities."
+amended:
+  - by: "codex-cli/gpt-6.1-sol"
+    at: "2026-10-27T13:10:35Z"
+    change: "Accept isolated build directories as the release-check workaround; no upstream defect claim is established."
 ---
 # Incremental Cabal build retains incompatible dependency identities
 

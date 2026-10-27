@@ -56,6 +56,33 @@ cancellation unwind the operation. No receipt table or schema migration is added
 - Cursors are queue-bound moving views, not snapshots or replay tokens. Refresh
   the first page for late lower IDs. Row limits bound neither JSON bytes nor scan
   work. Separate pools reserve connections but do not isolate database CPU/I/O.
-  Numeric performance acceptance is tracked by plan 9 and requires measurement.
+  Numeric performance acceptance is defined by plan 9 and requires measured
+  worker, operator-load, encoding, read-depth and retained-heap comparisons.
 - Queue recreation ends the message-ID identity lifetime. Hosts must not replay
   old operator requests after dropping and recreating queues.
+
+
+## Performance evidence constraints
+
+Use immutable original-source and matched-dependency controls with identical
+instrumentation. Count original worker completions by the source-message ID
+boundary so background redrives cannot inflate throughput. Retain every pair,
+failed bound and interrupted experiment; fixed-count extensions include all
+existing samples and all declared additional samples. A passing correctness
+suite does not replace performance acceptance.
+
+Bulk-seeded fixtures can trigger asynchronous maintenance after setup ends.
+Disable automatic maintenance only on disposable benchmark queues and complete
+manual vacuum/analyze and a checkpoint before warmup, recording the settings and
+maintenance counters. This is a controlled experiment configuration, not a
+production database policy. Check clock resolution before measuring short
+latencies; the benchmark uses Darwin raw monotonic time, shared by controls and
+candidate, with the portable GHC clock elsewhere (FRIC-3 in `docs/friction-log/`).
+Use separate Cabal build directories for distinct dependency/optimization
+configurations to avoid stale package identities (FRIC-2).
+
+The acceptance matrix covers ordinary and unlogged queues, finite administrative
+arrival rates, specified row/body sizes and pool limits. It makes no
+partitioned-layout claim and does not isolate database CPU, I/O or locks.
+The [measurement report](../performance/9-dlq-browse-and-redrive.md) records the
+exact configuration, ratios, confidence bounds and retained artifacts.

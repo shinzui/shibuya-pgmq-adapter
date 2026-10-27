@@ -6,7 +6,7 @@ generated:
   by: "codex-cli/gpt-6.1-sol"
   at: "2026-10-27T03:59:10Z"
 frictionId: FRIC-3
-status: logged
+status: "accepted"
 impact: detour
 kind: interface
 origin: "mori://shinzui/shibuya-pgmq-adapter"
@@ -14,6 +14,11 @@ affects: "https://gitlab.haskell.org/ghc/ghc"
 affectedVersion: "9.12.4"
 plan: "docs/plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md"
 workaround: "Use a benchmark-only Darwin C API call to clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW), identically in controls and candidate; retain the portable GHC clock elsewhere."
+resolution: "Use the shared benchmark-only raw monotonic Darwin clock for short latencies, retaining the portable GHC fallback; nanosecond units do not guarantee nanosecond clock resolution."
+amended:
+  - by: "codex-cli/gpt-6.1-sol"
+    at: "2026-10-27T13:10:35Z"
+    change: "Accept an explicit benchmark clock with measured resolution; production timing remains unchanged and no violated upstream guarantee is alleged."
 ---
 # Nanosecond runtime timer quantizes short latency measurements
 

@@ -49,9 +49,14 @@ Completion also requires measured performance acceptance. Compare existing worke
 - [x] M1 — Released PGMQ 0.7.0.0 and Shibuya core 0.12.0.0 support the unflagged producer-to-browse/fetch path (203 PostgreSQL examples, zero failures). On 2026-10-27, all seven worker workloads completed immutable original/matched/candidate controls in `.dev/dlq-release-fine-clock/`: 21 pairs for `ack-one`, seven elsewhere, with exact sources, dependencies, instrumentation, environment and raw measurements retained. Source/reason fields are exact. Numeric regression acceptance remains M4, including the fixed FIFO extension.
 - [x] M2 — Bounded browse/fetch, historical decoding and explicit physical registrations verified against released PGMQ 0.7.0.0 in the normal unflagged PostgreSQL suite on 2026-10-26. Tests compare all seven raw row fields, preserve invisible/malformed rows, cover 500-row lookahead, reject invalid requests before I/O, and verify separate-pool deadlines and setting cleanup.
 - [x] M3 — Default-off row-locked delete/send transactions verified on 2026-10-26 against released PGMQ 0.7.0.0, without a flag or temporary project. The clean final correctness suite passed 203 examples with zero failures, including 20 administration scenarios covering saved/missing/null headers, null payloads, normal handler input, concurrency, response-discard retry, rollback/recovery, cancellation, authorization and distinct topic fan-out copies.
-- [ ] M4 — Pass the numeric performance gates with retained baseline/candidate evidence, complete operator documentation and durable records, and pass the final released-dependency build and test checks.
+- [ ] M4 — Implementation, operator documentation, durable records and final clean released-dependency checks are complete. The full retained performance result passes 197/198 gates; original-control FIFO p95 remains 1.136174 against the unchanged 1.10 limit. The 21-pair extension was interrupted for immediate finalization and is INCONCLUSIVE. Full numeric acceptance remains open.
 
-Resume, 2026-10-26: verified Hackage publishes `pgmq-hasql 0.7.0.0` with `Pgmq.Hasql.Statements.Inspection`; upstream tag `v0.7.0.0` resolves to commit `88afb93802f790c1ecfbd3ed8bcce196c4430d13`. Commit `e5f26b7` adopts the released family and records all components building and 203 tests passing with administration enabled. The dependency-release prerequisite is satisfied. Remove the transitional flag and repeat final acceptance on the current candidate, including the committed `shibuya-core 0.12.0.0` compatibility update. M1 remains open for complete reproducible performance controls; M4 remains open for the full performance gates and final checks. The preserved pre-feature commit remains `e06e64b268055aca4eff78caabd1b0eb73aa1cd1`.
+Current release dependency state: Hackage publishes `pgmq-hasql 0.7.0.0` with
+`Pgmq.Hasql.Statements.Inspection`; upstream tag `v0.7.0.0` resolves to
+`88afb93802f790c1ecfbd3ed8bcce196c4430d13`. The normal build requires the released
+family and Shibuya core 0.12.0.0, with the transitional administration flag removed.
+The fixed pre-feature source remains `e06e64b268055aca4eff78caabd1b0eb73aa1cd1`.
+Only full performance acceptance remains open; no release has been published.
 
 ## Surprises & Discoveries
 
@@ -89,11 +94,45 @@ Resume, 2026-10-26: verified Hackage publishes `pgmq-hasql 0.7.0.0` with `Pgmq.H
 
 ## Outcomes & Retrospective
 
-Resume checkpoint, 2026-10-26: the released PGMQ 0.7.0.0 dependency is adopted, and the temporary `dlq-admin` flag has been removed from the library and tests. The normal unflagged PostgreSQL suite passes 203 examples with zero failures, including all 20 administration scenarios and the public embedding example. Haddock and strict bundle validations pass. A fresh `dist-dlq-release` build compiles all components; a reused build directory retained incompatible dependency identities (FRIC-2 in `docs/friction-log/`). The separate `shibuya-core 0.12.0.0` dependency update is now committed as `6241ed8` and is included in the final candidate.
+The normal-build browse/fetch and default-off atomic redrive implementation is
+complete using released PGMQ 0.7.0.0 and Shibuya core 0.12.0.0. Final clean
+validation on 2026-10-27 in `dist-dlq-release-final` built every component and
+passed all 203 PostgreSQL examples with zero failures, including 20 administration
+scenarios and the compiled public embedding example. Thirteen Python acceptance
+tests and capability, improvement-request and strict friction profile/log checks
+pass. Final logs are `.dev/dlq-release-final-build.log`,
+`.dev/dlq-release-final-test.log` and `.dev/dlq-release-final-haddock.log`.
 
-FRIC-1 is resolved by the published inspection release. The durable administration decisions remain in [ADR 0002](../adr/0002-managed-dlq-administration.md). The complete acceptance orchestrator now exists at `scripts/check-dlq-performance.py`, with common baseline-compatible worker instrumentation and candidate-only administration/encoding/read/retention measurements. Thirteen tests protect statistical ratio direction, incomplete evidence rejection, request failures and index-plan checks. Short smoke experiments are tooling diagnostics and always exit nonzero; they do not close any numeric gate.
+Performance acceptance is incomplete: the complete retained result passes
+197/198 gates. The sole unresolved gate is original-control FIFO p95 (median
+1.082919, upper95 1.136174, unchanged limit 1.10). The complete encoding extension
+passes all 60 gates. All fixed-rate operator-load, read/depth and retained-heap
+gates pass in the recorded controlled configuration. After the user requested
+immediate finalization, the owned FIFO extension was interrupted after three
+additional measurements and retained as INCONCLUSIVE. Its partial data cannot
+close acceptance. No scope waiver or release publication is claimed.
 
-This plan remains incomplete until the original/matched/candidate experiment passes every numeric gate. Preserve the fixed baseline and all failed/inconclusive runs. Final results, exact reproduction and retained artifact locations belong in `docs/performance/9-dlq-browse-and-redrive.md`. IR-3 remains proposed until complete acceptance; no external release or tag has been published by this plan.
+The [measurement report](../performance/9-dlq-browse-and-redrive.md) and
+[committed snapshot](../performance/9-dlq-browse-and-redrive-gates.json) retain
+all complete paired ratios, bounds, source/dependency identities and artifact
+locations, including failed/interrupted histories. Production Haskell/Cabal/Nix
+files remain identical to measured candidate `d4dfba1`. IR-3 remains proposed
+until complete acceptance. The durable decisions are distilled in
+[ADR 0002](../adr/0002-managed-dlq-administration.md).
+
+FRIC-1 is resolved by the published inspection API. FRIC-2 is accepted with
+isolated Cabal build directories per dependency/optimization configuration.
+FRIC-3 is accepted with an explicitly measured benchmark clock; nanosecond units
+do not guarantee nanosecond resolution. Fixture maintenance and clock precision
+must be controlled before starting another long experiment. The investigation
+and repeated experiments took too long; completed implementation and unresolved
+release criteria should have been communicated with an explicit elapsed-time
+and remaining-time estimate earlier.
+
+`mori validate` exits zero with a pre-existing schema-hash warning:
+recorded `sha256:d29ca03286afa92b7589d09b7a6d98ad8e39d11b255a4b8751f3327b0722fba3`
+versus embedded `sha256:dcb19e2312e790bad14e622cc98a1281cd2298c5b564a2f0d0534d3c718d8803`.
+No unrelated registry/schema migration is included.
 
 ## Context and Orientation
 
@@ -195,7 +234,7 @@ nix develop --no-write-lock-file -c cabal test shibuya-pgmq-adapter-test --enabl
 
 Expected output names actual executed examples for producer-to-browse, non-destructive pagination/fetch, and redrive as they are implemented, finishing with zero failures. A run selecting zero tests is not evidence. PostgreSQL executables must be available; the Nix shell supplies them. The tests install PGMQ in their ephemeral databases and need no production connection, running application, or external service started by `just process-up`.
 
-Complete the performance runner and acceptance script described in M4 before running the following commands; only the original-worker capture script exists at this resume checkpoint. Its `--baseline-ref` selects the preserved pre-feature source, and its default matrix includes all performance cases below, with the original and matched dependency controls. `--output` is an untracked artifact directory, not a database connection. The script must fail on omitted cases or missing baseline evidence, run children using argument arrays, and stop its own temporary database processes on exit:
+The performance runner and acceptance script described in M4 are implemented. Its `--baseline-ref` selects the preserved pre-feature source, and its default matrix includes all performance cases below, with the original and matched dependency controls. `--output` is an untracked artifact directory, not a database connection. The script must fail on omitted cases or missing baseline evidence, run children using argument arrays, and stop its own temporary database processes on exit:
 
 ```bash
 nix develop --no-write-lock-file -c cabal bench shibuya-pgmq-adapter-bench:bench:dlq-payload-bench
@@ -207,9 +246,9 @@ Expected final script output is `DLQ-PERFORMANCE: PASS` only after every require
 At the final coherent boundary run:
 
 ```bash
-nix develop --no-write-lock-file -c cabal build all --enable-tests --builddir=dist-dlq-release
-nix develop --no-write-lock-file -c cabal test shibuya-pgmq-adapter-test --enable-tests --builddir=dist-dlq-release --test-show-details=direct
-nix develop --no-write-lock-file -c cabal haddock shibuya-pgmq-adapter --builddir=dist-dlq-release
+nix develop --no-write-lock-file -c cabal build all --enable-tests --builddir=dist-dlq-release-final
+nix develop --no-write-lock-file -c cabal test shibuya-pgmq-adapter-test --enable-tests --builddir=dist-dlq-release-final --test-show-details=direct
+nix develop --no-write-lock-file -c cabal haddock shibuya-pgmq-adapter --builddir=dist-dlq-release-final
 okf validate docs/capabilities --profile docs/capabilities/profile.dhall --profile-enforce --log-enforce
 okf validate docs/improvement-requests --profile docs/improvement-requests/profile.dhall --profile-enforce --log-enforce
 git diff --check
@@ -373,3 +412,31 @@ combined result, using `--extend-worker-from .dev/dlq-release-encoding-extension
 Both extensions retain immutable measured binaries, original and superseded
 bounds, every observation and every unrelated gate. A failed extension remains
 unresolved; no further sample count or budget adjustment is implied.
+
+
+Final reassessment checkpoint, 2026-10-27: the complete resumed matrix measured
+all 198 gates (188 PASS, ten unresolved confidence bounds). The declared complete
+21-pair encoding extension then passed all 60 encoding gates; the combined result
+retains 365 logical measurement entries with 197/198 PASS. Only original-control
+FIFO worker p95 remains. Its declared 7+14=21-pair extension is running in
+`.dev/dlq-release-fifo-extension/` against the complete encoding parent. All
+original samples and superseded bounds remain retained. No numeric limit was
+waived; M4 remains open until the combined result and final checks pass.
+
+Friction triage: FRIC-1 is resolved by the published inspection API. FRIC-2 is
+accepted with isolated Cabal build directories per dependency/optimization
+configuration. FRIC-3 is accepted with the shared benchmark-only raw monotonic
+clock; nanosecond units alone do not promise nanosecond resolution. No upstream
+bug report is asserted by either accepted workaround.
+
+
+Immediate-finalization checkpoint, 2026-10-27: after the user requested that
+work finish now, stopped the owned FIFO extension and retained its three completed
+additional measurements as INCONCLUSIVE. The last complete combined result
+remains 197/198 PASS; original-control FIFO p95 has median 1.082919, upper bound
+1.136174 and unchanged limit 1.10. The implementation is complete, but M4 remains
+open. No performance waiver or release publication is inferred from the timing
+request. The committed gate snapshot in
+`docs/performance/9-dlq-browse-and-redrive-gates.json` retains all paired ratios,
+confidence bounds, dependency versions and measured source hashes. Production
+Haskell/Cabal/Nix source is unchanged from measured candidate `d4dfba1`.

@@ -6,7 +6,7 @@ description: >-
   structured reason code, reason detail, attempt count, and original queue; fetch one entry —
   plus an explicit, gated redrive operation, so an operator can see why messages died and
   safely return them to their source queue.
-timestamp: 2026-08-19T00:00:00Z
+timestamp: 2026-10-27T13:16:11Z
 requestId: IR-3
 status: proposed
 origin: mori://shinzui/keiro-ui
@@ -23,6 +23,14 @@ The DLQ payload contract this request reads back is the one this repository ship
 `mori://shinzui/shibuya-pgmq-adapter/okf/improvement-requests/concepts/IR-1` (completed) —
 this request is its natural continuation: first the reasons were preserved, now the operator
 gets to see them. Implementation is the adapter's own downstream work.
+
+Implementation is available in the normal build with released PGMQ 0.7.0.0:
+browse/fetch and default-off atomic redrive are covered by the real-database
+suite and the compiled public embedding example. The request remains proposed
+pending complete plan acceptance: [plan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md)
+records 197/198 performance gates passing, with one FIFO worker latency bound
+unresolved. The [gate snapshot](../performance/9-dlq-browse-and-redrive-gates.json)
+retains all ratios and limits. No release or performance waiver is claimed.
 
 ## Context
 

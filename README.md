@@ -49,6 +49,8 @@ The in-process `Shibuya.Adapter.Pgmq.DeadLetter` API supports explicitly registe
 DLQs, bounded non-destructive browse/fetch, mixed historical envelopes and gated
 atomic redrive. New adapter writes always preserve source identity. The API is included in the normal build using released PGMQ dependencies.
 [Plan 9](docs/plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md)
-tracks measured performance acceptance.
+records implementation and validation. The [performance report](docs/performance/9-dlq-browse-and-redrive.md)
+retains 197 passed gates and the one unresolved FIFO latency bound; full performance
+acceptance remains open.
 See the [embedding and operator guide](docs/user/pgmq-dead-letter-queues.md#browse-fetch-and-redrive)
 for pool ownership, source mappings, defaults and recovery guarantees.

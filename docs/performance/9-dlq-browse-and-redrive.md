@@ -2,15 +2,67 @@
 
 Plan: [ExecPlan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md).
 
-Status: **incomplete**. The fine-clock experiment completed all worker
-controls, passing 44 of 45 worker gates. Original-control FIFO p95 awaits its
-predeclared fixed-count extension. Operator load, encoding, reads and retention
-remain in progress; no overall performance PASS is claimed. PGMQ 0.7.0.0 now supplies the released
-inspection dependency. The complete paired candidate,
-matched-dependency, administrative-load, large-queue, allocation and retained-heap
-matrix has not been measured. Ordinary, unlogged and partitioned queues have no
-validated performance budget from this work yet. Correctness tests and the
-serialization benchmark do not establish performance isolation.
+Status: **implementation complete; performance acceptance incomplete**.
+The complete retained matrix passes **197 of 198 gates**. The sole unresolved
+gate is original-control FIFO worker p95: median cost ratio **1.082919**,
+one-sided 95% upper bound **1.136174**, limit **1.10**. All numeric limits remain
+unchanged. The fixed FIFO extension was interrupted after three additional
+measurements when the user requested immediate finalization on 2026-10-27;
+its partial measurements do not replace the seven-pair result or close M4.
+
+The [committed gate snapshot](9-dlq-browse-and-redrive-gates.json) preserves all
+198 results, every paired ratio, medians, bounds, limits, dependency versions,
+measured source hashes and environment. It records FAIL honestly. Complete raw
+measurements and logs remain in the `.dev/` artifact directories below.
+
+The measured candidate is `d4dfba17d0be431ed6b7f7e30ad7f8722b4166d8`,
+using released PGMQ 0.7.0.0 and Shibuya core 0.12.0.0. Subsequent changes affect
+orchestration, acceptance tests and documentation; frozen Haskell/Cabal/Nix
+source hashes are verified before evidence reuse. The final combined result must
+pass all 198 original numeric gates. Separate pools alone do not establish
+performance isolation. Partitioned queues are outside the validated matrix.
+
+## Retained complete result
+
+| Gate family | Passed / required |
+|---|---:|
+| Worker controls, including idle handle | 44 / 45 |
+| Four fixed-rate operator-load comparisons | 8 / 8 |
+| Encoding timing and allocation | 60 / 60 |
+| Adapter versus raw reads | 60 / 60 |
+| Tenfold queue-depth scaling | 24 / 24 |
+| Five-minute retained heap | 1 / 1 |
+| Total | **197 / 198** |
+
+Confidence bounds use 10,000 bootstrap resamples of paired medians with seed
+910262026. Throughput ratios are control/candidate; latency ratios are
+candidate/control. Encoding, allocation and adapter-read ratios are normalized
+by their specified combined allowances, so their limit is one. The snapshot
+retains each individual workload rather than averaging percentiles across cases.
+The encoding matrix and `ack-one` use 21 pairs; other completed cases use seven.
+
+All 18,480 scheduled administrative calls completed successfully across the 28
+loaded runs, with zero failures and a drained backlog. Each run achieved one
+redrive/second. The following ranges show the smallest/largest per-run
+scheduled-arrival redrive percentiles, not pooled or averaged percentiles:
+
+| Four-worker workload | Redrive p50 range (ms) | Redrive p95 range (ms) |
+|---|---:|---:|
+| Ordinary, batch 1 | 0.812–1.090 | 1.450–1.529 |
+| Ordinary, batch 50 | 2.052–2.680 | 3.199–3.344 |
+| FIFO, batch 1 | 2.776–3.035 | 3.282–3.355 |
+| FIFO, batch 50 | 2.848–3.056 | 3.300–3.376 |
+
+All required actual read plans use message-ID index access without full-table
+scans or sorts. The five-minute large-page run processed 3,360 pages; median
+retained-heap growth was 565,712 bytes against the 8,388,608-byte allowance.
+Peak residency was 50,602,176 bytes and median allocation per page was
+104,248,639.5 bytes. JSONB `pg_column_size` observations and CPU/I/O counters are
+retained in the raw run artifacts separately from compact-JSON byte assertions.
+
+These results use the disposable database configuration below, including
+`fsync=off`, `synchronous_commit=off` and controlled fixture maintenance. They
+establish no production SLO or arbitrary-load isolation guarantee.
 
 ## Preserved original control
 
@@ -149,7 +201,7 @@ default-deviation run with 100/10,000/100,000-character bodies is retained at
 `.dev/dlq-payload-bench-initial.log`; it is not the exact-size final matrix. Neither is the
 required dedicated repeated-encoding allocation loop or bootstrap comparison.
 
-## Remaining acceptance
+## Acceptance protocol
 
 The released PGMQ 0.7.0.0 family is adopted and the temporary administration
 flag has been removed. The full `scripts/check-dlq-performance.py` acceptance
@@ -157,12 +209,12 @@ orchestrator is implemented. It retains both the original dependency baseline
 and a matched released-dependency control; neither the local 0.7.0.0 integration
 proof nor the single baseline sample replaces these controls.
 
-Run the entire matrix and numeric budgets in plan 9, including initialization
-with an idle administration handle, the no-handle comparison, dedicated encoding
+The matrix implements every numeric budget in plan 9: initialization with an
+idle administration handle and a separate no-handle control, dedicated encoding
 allocations, fixed-rate successful operator traffic with scheduled-arrival
 latency/backlog counts, 100k/1m ordinary and unlogged read fixtures, raw-read
 controls and actual query plans, and five-minute retained-heap measurements.
-Retain all paired runs and confidence bounds. Failed or inconclusive budgets
+Retain every paired run and confidence bound. Failed or inconclusive budgets
 leave M4 open; none may be relaxed without the user's scope decision.
 
 
@@ -172,7 +224,7 @@ The unflagged PostgreSQL suite passes 203 examples, including 20 administration
 scenarios, with PGMQ 0.7.0.0 and Shibuya core 0.12.0.0. All components build in
 `dist-dlq-release` and Haddock succeeds. Thirteen Python tests protect acceptance
 ratios and fail-closed evidence checks. These are correctness/tooling evidence.
-The full measured acceptance result remains pending.
+The final retained performance result has one unresolved gate.
 
 The runner exports immutable source controls; the matched control's retained
 compatibility patch upgrades family constraints and populates the new
@@ -237,9 +289,10 @@ were all multiples of 1000ns. A direct 100,000-read diagnostic confirmed the GHC
 runtime timer's 1000ns quantization on this host; Darwin
 `clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)` instead observed 41/42ns steps.
 Retain `.dev/check-dlq-clock.log` and the failed stabilized attempt, and see FRIC-3
-in `docs/friction-log/`. The system SDK `_time.h` declares the API, and the
-[GHC 9.12.4 timing implementation](https://raw.githubusercontent.com/ghc/ghc/ghc-9.12.4-release/rts/posix/GetTime.c)
-selects the platform monotonic clock when available.
+in `docs/friction-log/`. The system SDK `_time.h` declares the API. The GHC 9.12.4 timing implementation
+(project `mori://ghc/ghc`, tag `ghc-9.12.4-release`, path
+`rts/posix/GetTime.c`; artifact-level URI pending) selects the platform monotonic
+clock when available.
 
 `PerformanceClock` now supplies the raw monotonic clock on Darwin, with the GHC
 clock elsewhere. The same module is applied to both worker controls and the
@@ -251,7 +304,7 @@ The fine-clock candidate check observed 0.030959ms p95 with one-nanosecond commo
 divisor across its recorded deltas; it is diagnostic, not acceptance.
 
 
-## Active final-candidate experiment
+## Fine-clock parent experiment
 
 Candidate `d4dfba1`, unchanged shared raw-clock instrumentation, released
 dependencies, fixed original source `e06e64b268055aca4eff78caabd1b0eb73aa1cd1`:
@@ -265,9 +318,9 @@ nix develop --no-write-lock-file -c python3 scripts/check-dlq-performance.py \
 
 Artifacts: `.dev/dlq-release-fine-clock/`; top-level progress log:
 `.dev/dlq-release-fine-clock.log`. All six `ack-one` gates passed after all 63
-original/matched/candidate samples completed. Other worker, operator-load,
-encoding, read-depth and retention gates are still pending. `result.json` is the
-machine-readable running result, not a complete acceptance certificate.
+original/matched/candidate samples completed. The worker controls completed; the parent subsequently stopped as INCONCLUSIVE
+because the batch-one FIFO operator fixture supplied too few observations.
+The resumption below preserves all valid measurements, including failed bounds.
 
 
 FIFO's first seven pairs passed five of six gates; original-control p95 remained
@@ -281,7 +334,7 @@ final all-pairs reassessment:
 ```bash
 nix develop --no-write-lock-file -c python3 scripts/check-dlq-performance.py \
   --baseline-ref e06e64b268055aca4eff78caabd1b0eb73aa1cd1 \
-  --extend-worker-from .dev/dlq-release-fine-clock \
+  --extend-worker-from .dev/dlq-release-encoding-extension \
   --worker-scenario ack-fifo --worker-pairs 21 \
   --output .dev/dlq-release-fifo-extension
 ```
@@ -322,9 +375,9 @@ Resumption verifies the frozen code, constraints, tools and hardware, references
 all matching measurements by exact argument vector and case/pair identity, and
 retains failures instead of rerunning them. Changed fixture arguments receive
 new measurements. All parent evidence remains intact, and every required gate
-is recomputed over its complete prescribed pairs. After this resumed parent
-finishes, use it (not the incomplete initial parent) as `--extend-worker-from`
-for the already declared FIFO extension to 21 pairs.
+is recomputed over its complete prescribed pairs. The resumed parent completed 337 logical measurement entries and all 198 gates:
+188 passed, with FIFO worker p95 and nine encoding time bounds unresolved.
+The complete encoding extension below then became the FIFO extension parent.
 
 
 ## Fixed complete encoding extension
@@ -355,3 +408,31 @@ links verified immutable source/binaries/dependency evidence, and retains initia
 bounds in `supersededGates`. A stage reporting FAIL may still carry an unrelated
 unresolved gate; the final combined result must pass all 198. No further sample
 extension or changed limit is authorized by this declaration.
+
+
+## Complete encoding result and final FIFO reassessment
+
+The complete fixed 21-pair encoding matrix finished with every timing,
+allocation and exact compact-JSON byte-growth check passing. The combined result
+in `.dev/dlq-release-encoding-extension/result.json` retains 365 logical
+measurement entries and passes 197 of 198 gates. Its only unresolved gate is
+`ack-fifo/original/p95` from the original seven worker pairs.
+
+The FIFO extension in `.dev/dlq-release-fifo-extension/` used that complete
+encoding result as parent. It was interrupted after three completed additional
+measurements to honor immediate finalization. Its result is INCONCLUSIVE and
+all files are retained. The declared 21-pair reassessment has not completed;
+do not mix its partial samples into acceptance or claim an overall PASS.
+Completing plan 9 still requires a complete fixed experiment meeting the
+original gate, or an explicit user decision to defer performance acceptance.
+
+
+## Final implementation checks
+
+After stopping the FIFO extension, the fresh O1 build directory
+`dist-dlq-release-final` built every component and passed the full unflagged
+suite: 203 examples, zero failures. Thirteen Python acceptance-checker tests and
+all three changed OKF bundle profile/log validations pass. Final build/test/
+Haddock logs are `.dev/dlq-release-final-{build,test,haddock}.log`.
+These checks complete the implementation handoff; they do not waive the one
+remaining numeric performance gate.

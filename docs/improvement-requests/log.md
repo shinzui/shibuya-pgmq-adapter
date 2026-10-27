@@ -1,5 +1,8 @@
 # Bundle Update Log
 
+## 2026-10-27
+* **Update**: Record completed browse/fetch/default-off redrive implementation and compiled embedding evidence; retain proposed status because plan 9 has one unresolved performance gate and no published release.
+
 ## 2026-08-19
 * **Addition**: Expose dead-letter-queue browse and redrive for adapter-managed DLQs (IR-3) filed from keiro-ui
 * **Addition**: Surface queue depth and age context for processors consuming pgmq queues (IR-2) filed from keiro-ui

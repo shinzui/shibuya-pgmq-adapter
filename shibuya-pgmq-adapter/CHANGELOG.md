@@ -13,7 +13,8 @@
 - Add an in-process `Shibuya.Adapter.Pgmq.DeadLetter` API for registered,
   non-destructive browse/fetch and default-disabled transactional redrive in the
   normal build; the temporary `dlq-admin` flag is removed. Numeric performance
-  acceptance is tracked in plan 9.
+  acceptance retains 197 passed gates and one unresolved FIFO latency bound in
+  plan 9; all original limits remain unchanged.
 
 ## 0.17.0.0 — 2026-10-25
 

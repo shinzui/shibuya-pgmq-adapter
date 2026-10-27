@@ -2,7 +2,7 @@
 title: "Dead-letter routing"
 type: Capability
 description: "Opt-in dead-letter handling that moves a failed or over-retried message to a target queue in one PostgreSQL transaction, preserving a queryable reason code and optional detail alongside the compatibility rendering."
-timestamp: "2026-10-27T02:26:03Z"
+timestamp: "2026-10-27T13:16:11Z"
 generated:
   by: codex/1.0
   at: "2026-08-10T21:15:04Z"
@@ -27,6 +27,7 @@ packages:
 interface:
   - Shibuya.Adapter.Pgmq.PgmqAcknowledgementException
   - Shibuya.Adapter.Pgmq.Config
+  - Shibuya.Adapter.Pgmq.DeadLetter
 requires:
   - CAP-1
 evidence:
@@ -92,10 +93,10 @@ let config = (defaultConfig queueName)
   delete-first ambiguous-commit protection, concurrent finalizer ownership, and
   typed terminal failure route are part of the next release after 0.16.0.0;
   consumers on older versions do not have those stronger guarantees.
-- **Direct-queue routing is the integration-tested path.** The chaos evidence
-  drives `directDeadLetter`. The `topicDeadLetter` / `TopicRoute` send path is
-  only unit-tested at the smart-constructor level; its end-to-end behavior
-  inherits the weaker evidence of CAP-6 (Topic-based routing).
+- **Routing evidence is bounded.** The chaos evidence drives `directDeadLetter`;
+  the administration suite also drives a real two-destination topic failure and
+  independently redrives both copies. This does not establish arbitrary topic
+  routing behavior beyond the CAP-6 contract.
 - **The guarantee is per source identity.** Reconstructing or concurrently
   retaining callbacks is safe because the source-row claim is durable. This is
   not an exactly-once guarantee for application handler side effects, which may
@@ -130,8 +131,10 @@ rollback, cancellation and transaction-local deadlines on separate pools.
 The [operator guide](../user/pgmq-dead-letter-queues.md) includes a compiled public
 embedding example and documents queue recreation and per-copy topic semantics.
 
-Numeric performance acceptance is still open. The
-[measurement report](../performance/9-dlq-browse-and-redrive.md) separates the
-initial original-dependency sample from the outstanding full paired matrix.
-No throughput, latency, allocation or partitioned-layout performance budget is
-claimed as validated by these correctness tests or the serialization benchmark.
+The [measurement report](../performance/9-dlq-browse-and-redrive.md) and
+[committed gate snapshot](../performance/9-dlq-browse-and-redrive-gates.json)
+retain 197 passed gates and one unresolved FIFO worker latency confidence bound.
+All four fixed-rate operator-load comparisons, encoding, ordinary/unlogged
+read/depth and retained-heap gates pass in the recorded controlled configuration.
+Overall performance acceptance remains open, with original limits unchanged;
+partitioned queues have no validated performance budget from this matrix.
