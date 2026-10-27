@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Require [`shibuya-core`](mori://shinzui/shibuya/packages/shibuya-core) 0.12.0.0.
+  PGMQ deliveries report `DeliveryCurrent` through the new
+  `Ingested.deliveryStatus` field, preserving handler and acknowledgement behavior.
 - Require the [`pgmq-hs`](mori://shinzui/pgmq-hs) 0.7.0.0 package family (`pgmq-core`, `pgmq-hasql`,
   `pgmq-effectful`, and `pgmq-migration`) across the adapter, tests, example,
   and benchmarks. Inspection statements are now available from Hackage.

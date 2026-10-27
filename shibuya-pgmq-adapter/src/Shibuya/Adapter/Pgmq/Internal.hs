@@ -112,7 +112,7 @@ import Shibuya.Adapter.Pgmq.Convert
   )
 import Shibuya.Core.Ack (AckDecision (..), DeadLetterReason (..), RetryDelay (..))
 import Shibuya.Core.AckHandle (AckHandle (..))
-import Shibuya.Core.Ingested (Ingested (..))
+import Shibuya.Core.Ingested (DeliveryStatus (..), Ingested (..))
 import Shibuya.Core.Lease (Lease (..))
 import Shibuya.Core.Types (TraceHeaders)
 import Shibuya.Telemetry.Effect (Tracing)
@@ -446,7 +446,8 @@ mkIngested env config msg = do
           Ingested
             { envelope = pgmqMessageToEnvelope msg,
               ack = ackHandle,
-              lease = Just lease
+              lease = Just lease,
+              deliveryStatus = pure DeliveryCurrent
             }
 
 finalizeAutoDeadLetter ::
