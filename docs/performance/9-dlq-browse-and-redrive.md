@@ -2,9 +2,10 @@
 
 Plan: [ExecPlan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md).
 
-Status: **incomplete**. The fine-clock experiment has passed all six `ack-one`
-gates across the complete, predeclared 21 pairs. The rest of the matrix remains
-in progress; no overall performance PASS is claimed. PGMQ 0.7.0.0 now supplies the released
+Status: **incomplete**. The fine-clock experiment completed all worker
+controls, passing 44 of 45 worker gates. Original-control FIFO p95 awaits its
+predeclared fixed-count extension. Operator load, encoding, reads and retention
+remain in progress; no overall performance PASS is claimed. PGMQ 0.7.0.0 now supplies the released
 inspection dependency. The complete paired candidate,
 matched-dependency, administrative-load, large-queue, allocation and retained-heap
 matrix has not been measured. Ordinary, unlogged and partitioned queues have no
@@ -169,7 +170,7 @@ leave M4 open; none may be relaxed without the user's scope decision.
 
 The unflagged PostgreSQL suite passes 203 examples, including 20 administration
 scenarios, with PGMQ 0.7.0.0 and Shibuya core 0.12.0.0. All components build in
-`dist-dlq-release` and Haddock succeeds. Ten Python tests protect acceptance
+`dist-dlq-release` and Haddock succeeds. Twelve Python tests protect acceptance
 ratios and fail-closed evidence checks. These are correctness/tooling evidence.
 The full measured acceptance result remains pending.
 
@@ -291,3 +292,36 @@ combined result keeps every unrelated parent gate, so it cannot turn another
 failed or incomplete case into an overall PASS. The checker also enforces the
 original operator success budget (at least 99%, with drained backlog); a boundary
 test prevents accidentally requiring 100% success. No measurement is discarded.
+
+
+## Operator fixture sample sufficiency and resumption
+
+Both ordinary-worker operator-load cases passed. The original
+`fifo-load-one` source fixture of 3,000,000 rows produced only 48–52 observations
+per minute. Those 14 runs are retained as inconclusive; they cannot satisfy the
+minimum 1,000 observations. The full parent stopped with INCONCLUSIVE rather than
+accepting them or omitting the remaining cases.
+
+Only that operator case now uses a 100,000-row source, retaining the prescribed
+100,000-row DLQ, 1-KB source bodies, four workers, batch size one, four/two pool
+connections and 5 browse / 5 fetch / 1 redrive calls per second. Source count was
+not fixed by the plan. The full-duration check in
+`.dev/dlq-fifo-one-fixture-check.json` recorded 1,532 observations, 98,270 remaining
+rows and 660 successful calls. It is diagnostic, not a paired acceptance run.
+The three-million-row `ack-fifo` worker data remain unchanged.
+
+```bash
+nix develop --no-write-lock-file -c python3 scripts/check-dlq-performance.py \
+  --baseline-ref e06e64b268055aca4eff78caabd1b0eb73aa1cd1 \
+  --resume-from .dev/dlq-release-fine-clock \
+  --case-seed-count fifo-load-one=100000 \
+  --output .dev/dlq-release-resumed
+```
+
+Resumption verifies the frozen code, constraints, tools and hardware, references
+all matching measurements by exact argument vector and case/pair identity, and
+retains failures instead of rerunning them. Changed fixture arguments receive
+new measurements. All parent evidence remains intact, and every required gate
+is recomputed over its complete prescribed pairs. After this resumed parent
+finishes, use it (not the incomplete initial parent) as `--extend-worker-from`
+for the already declared FIFO extension to 21 pairs.

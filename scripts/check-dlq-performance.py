@@ -150,9 +150,31 @@ class Experiment:
         self.sequence = 0
         self.runs = []
         self.gates = []
+        self.reuse = {}
+        self.parent = None
+
+    def load_parent(self, parent, result):
+        self.parent = parent
+        for run in result["runs"]:
+            artifact = parent / run["artifact"]
+            label = artifact.name.split("-", 1)[1].removesuffix(".json")
+            key = (label, tuple(map(str, run["arguments"])))
+            if key in self.reuse:
+                raise ValueError("duplicate reusable measurement identity: " + label)
+            # Include failed/invalid records too. Changing nothing must not
+            # silently rerun a failure until it happens to look favorable.
+            self.reuse[key] = artifact.resolve()
 
     def measure(self, binary, arguments, label):
         self.sequence += 1
+        key = (label, tuple(map(str, arguments)))
+        if key in self.reuse:
+            artifact = self.reuse[key]
+            record = json.loads(artifact.read_text())
+            self.runs.append({"artifact": str(artifact), "arguments": arguments, "reusedFrom": str(self.parent)})
+            self.save("RUNNING")
+            print("DLQ-PERFORMANCE: retained " + label, flush=True)
+            return record
         name = f"{self.sequence:04}-{label}"
         print(f"DLQ-PERFORMANCE: measuring {name}", flush=True)
         log = self.output / (name + ".log")
@@ -175,7 +197,7 @@ class Experiment:
 
     def save(self, status):
         write_json(self.output / "result.json", {"status": status, "bootstrapSeed": SEED, "bootstrapResamples": 10000,
-            "runs": self.runs, "gates": self.gates})
+            "runs": self.runs, "gates": self.gates, "resumedFrom": str(self.parent) if self.parent else None})
 
 
 def plans_use_indexes(value):
@@ -193,6 +215,30 @@ def plans_use_indexes(value):
     return (not any(node["Node Type"] in ("Seq Scan", "Sort", "Incremental Sort") for node in nodes)
             and any(node["Node Type"] in ("Index Scan", "Index Only Scan")
                     and "msg_id" in node.get("Index Cond", "") for node in nodes))
+
+
+def verify_frozen_parent(parent, baseline):
+    if not parent.is_relative_to(ROOT / ".dev"):
+        raise ValueError("parent experiment must be under this checkout's .dev")
+    previous = json.loads((parent / "result.json").read_text())
+    if previous["status"] == "RUNNING":
+        raise ValueError("wait for the parent experiment to finish")
+    environment = json.loads((parent / "environment.json").read_text())
+    if environment["baselineCommit"] != baseline:
+        raise ValueError("baseline differs from parent")
+    for name, command in (("ghc", ["ghc", "--numeric-version"]), ("postgresql", ["postgres", "--version"]), ("cabal", ["cabal", "--version"])):
+        if capture.query(command, ROOT) != environment[name]:
+            raise ValueError(name + " differs from parent")
+    for relative, digest in json.loads((parent / "candidate-sha256.json").read_text()).items():
+        path = ROOT / relative
+        if path.suffix in (".hs", ".cabal", ".nix") or path.name in ("cabal.project", "flake.lock"):
+            if not path.exists() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                raise ValueError("measured source/constraints changed: " + relative)
+    if environment["machine"] != platform.machine() or environment["cpuCount"] != os.cpu_count():
+        raise ValueError("hardware differs from parent")
+    if environment.get("hardware") and capture.query(["sysctl", "hw.model", "hw.memsize", "machdep.cpu.brand_string"], ROOT) != environment["hardware"]:
+        raise ValueError("hardware differs from parent")
+    return previous, environment
 
 
 def extend_worker(args):
@@ -312,6 +358,8 @@ def main():
     parser.add_argument("--seed-count", type=int, default=3_000_000)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--smoke", action="store_true", help="short diagnostic; always INCONCLUSIVE")
+    parser.add_argument("--resume-from", type=Path, help="retain every matching measurement from a finished parent")
+    parser.add_argument("--case-seed-count", dest="case_seed_counts", action="append", default=[], help="fixed source fixture SCENARIO=ROWS (default fifo-load-one=100000)")
     parser.add_argument("--extend-worker-from", type=Path, help="finished parent experiment; retain all of its pairs")
     parser.add_argument("--worker-scenario", choices=SCENARIOS)
     parser.add_argument("--worker-pairs", type=int, default=21, help="fixed total pairs for one extension; no early stopping")
@@ -320,7 +368,16 @@ def main():
         parser.error("acceptance requires >=7 pairs, >=10s warmup and >=60s samples")
     if args.pairs < 1 or args.ack_one_pairs < 1 or args.warmup_seconds < 0 or args.sample_seconds < 1 or args.seed_count < 1000:
         parser.error("invalid experiment size")
+    overrides = {} if args.smoke else {"fifo-load-one": 100_000}
+    for override in args.case_seed_counts:
+        name, separator, value = override.partition("=")
+        if not separator or name not in (*SCENARIOS, "ack-load-one", "ack-load-fifty", "fifo-load-one", "fifo-load-fifty") or not value.isdecimal() or int(value) < 1000:
+            parser.error("invalid per-case source fixture: " + override)
+        overrides[name] = int(value)
+    args.case_seed_counts = overrides
     if args.extend_worker_from:
+        if args.resume_from:
+            parser.error("choose resume or extension")
         return extend_worker(args)
     if args.worker_scenario:
         parser.error("--worker-scenario requires --extend-worker-from")
@@ -340,19 +397,39 @@ def main():
             env["hardware"] = capture.query(["sysctl", "hw.model", "hw.memsize", "machdep.cpu.brand_string"], ROOT)
         write_json(output / "environment.json", env)
         (output / "candidate-working.patch").write_bytes(subprocess.check_output(["git", "diff", "HEAD", "--binary"], cwd=ROOT))
-        original = snapshot(output, "original", baseline)
-        pristine = snapshot(output, "pristine", baseline)
-        matched = snapshot(output, "matched", baseline)
-        candidate = snapshot(output, "candidate")
-        instrument(original, False)
-        instrument(matched, True)
-        (output / "original-instrumentation.patch").write_text(source_patch(pristine, original))
-        (output / "matched-compatibility.patch").write_text(source_patch(original, matched))
-        hashes = {str(p.relative_to(candidate)): hashlib.sha256(p.read_bytes()).hexdigest()
-                  for p in candidate.rglob("*") if p.is_file()}
-        write_json(output / "candidate-sha256.json", hashes)
-        binaries = {"original": build(output, original, "original"), "matched": build(output, matched, "matched"),
-                    "candidate": build(output, candidate, "candidate", True)}
+        if args.resume_from:
+            parent = args.resume_from.resolve()
+            previous, parent_environment = verify_frozen_parent(parent, baseline)
+            experiment.load_parent(parent, previous)
+            env["orchestratorCommit"] = env["candidateCommit"]
+            env["candidateCommit"] = parent_environment["candidateCommit"]
+            env["resumedFrom"] = str(parent)
+            env["parentResultSha256"] = hashlib.sha256((parent / "result.json").read_bytes()).hexdigest()
+            write_json(output / "environment.json", env)
+            for kind in ("original", "matched", "candidate"):
+                (output / (kind + "-source")).symlink_to((parent / (kind + "-source")).resolve(), target_is_directory=True)
+                shutil.copy2(parent / (kind + "-dependencies.json"), output / (kind + "-dependencies.json"))
+            for filename in ("candidate-sha256.json", "original-instrumentation.patch", "matched-compatibility.patch", "candidate-working.patch"):
+                shutil.copy2(parent / filename, output / filename)
+            binaries = {}
+            for kind in ("original", "matched", "candidate"):
+                target = "dlq-admin-performance" if kind == "candidate" else "dlq-performance"
+                binaries[kind] = str(next(path for path in (parent / (kind + "-source") / "dist-performance").rglob(target)
+                                          if path.is_file() and os.access(path, os.X_OK)))
+        else:
+            original = snapshot(output, "original", baseline)
+            pristine = snapshot(output, "pristine", baseline)
+            matched = snapshot(output, "matched", baseline)
+            candidate = snapshot(output, "candidate")
+            instrument(original, False)
+            instrument(matched, True)
+            (output / "original-instrumentation.patch").write_text(source_patch(pristine, original))
+            (output / "matched-compatibility.patch").write_text(source_patch(original, matched))
+            hashes = {str(p.relative_to(candidate)): hashlib.sha256(p.read_bytes()).hexdigest()
+                      for p in candidate.rglob("*") if p.is_file()}
+            write_json(output / "candidate-sha256.json", hashes)
+            binaries = {"original": build(output, original, "original"), "matched": build(output, matched, "matched"),
+                        "candidate": build(output, candidate, "candidate", True)}
         dependencies = {}
         for kind in ("original", "matched", "candidate"):
             plan = json.loads((output / (kind + "-dependencies.json")).read_text())
@@ -370,12 +447,13 @@ def main():
             worker_pairs = args.pairs
             if not args.smoke and scenario == "ack-one":
                 worker_pairs = max(args.pairs, args.ack_one_pairs)
+            case_seeds = args.case_seed_counts.get(scenario, seeds)
             for pair in range(worker_pairs):
                 order = ["original", "matched", "candidate"] + (["none"] if scenario == "ack-four" else [])
                 if pair % 2:
                     order.reverse()
                 for kind in order:
-                    arguments = [scenario, warm, sample, seeds] if kind in ("original", "matched") else ["worker", scenario, warm, sample, seeds, "none" if kind == "none" else "idle"]
+                    arguments = [scenario, warm, sample, case_seeds] if kind in ("original", "matched") else ["worker", scenario, warm, sample, case_seeds, "none" if kind == "none" else "idle"]
                     record = experiment.measure(binaries.get(kind, binaries["candidate"]), arguments, f"worker-{scenario}-{kind}-{pair + 1}")
                     data[kind].append(record)
             if not args.smoke:
@@ -385,10 +463,11 @@ def main():
                     experiment.gates += worker_gates("idle-handle", data["none"], data["candidate"])
                 experiment.save("RUNNING")
         for scenario in ("ack-load-one", "ack-load-fifty", "fifo-load-one", "fifo-load-fifty"):
+            case_seeds = args.case_seed_counts.get(scenario, seeds)
             data = {"idle": [], "load": []}
             for pair in range(args.pairs):
                 for mode in (["idle", "load"] if pair % 2 == 0 else ["load", "idle"]):
-                    data[mode].append(experiment.measure(binaries["candidate"], ["worker", scenario, warm, sample, seeds, mode], f"load-{scenario}-{mode}-{pair + 1}"))
+                    data[mode].append(experiment.measure(binaries["candidate"], ["worker", scenario, warm, sample, case_seeds, mode], f"load-{scenario}-{mode}-{pair + 1}"))
             if not args.smoke:
                 experiment.gates += worker_gates("operator-load/" + scenario, data["idle"], data["load"], loaded=True)
         encoding = {"current": [], "aware": []}

@@ -298,3 +298,19 @@ all previous pairs, verifies unchanged measured source/tool/hardware identities,
 reuses immutable binaries, and recomputes the selected case over the entire data
 set. It refuses a running parent to preserve sequential measurements and retains
 all unrelated gates and the superseded initial bounds in the combined result.
+
+
+The batch-size-one FIFO operator case defaults to a 100,000-row source fixture
+(`--case-seed-count fifo-load-one=100000`), while keeping its 100,000-row DLQ.
+Other worker source fixtures retain `--seed-count`. This avoids spending the
+whole interval scanning a multi-million-row source while missing the minimum
+latency observation count; every run must still prove no depletion and >=1,000
+observations.
+
+Use `--resume-from <finished-output>` with a fresh output directory to retain
+all exactly matching samples after an interruption or corrected fixture. It
+verifies frozen measured code, tools and hardware and reuses immutable binaries.
+Failed matching samples are retained too: unchanged settings cannot silently
+retry a failure. `--case-seed-count SCENARIO=ROWS` fixes source counts for a case
+on both sides of every pair. The parent bundle remains unchanged and all other
+workload and acceptance requirements still apply.

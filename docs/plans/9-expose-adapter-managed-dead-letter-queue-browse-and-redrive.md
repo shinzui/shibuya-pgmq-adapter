@@ -46,7 +46,7 @@ Completion also requires measured performance acceptance. Compare existing worke
 ## Progress
 
 
-- [ ] M1 — Establish a supported dependency baseline, capture reproducible pre-feature performance measurements, and prove the public producer-to-browse path against real PostgreSQL, including source identity and exact reason fields.
+- [x] M1 — Released PGMQ 0.7.0.0 and Shibuya core 0.12.0.0 support the unflagged producer-to-browse/fetch path (203 PostgreSQL examples, zero failures). On 2026-10-27, all seven worker workloads completed immutable original/matched/candidate controls in `.dev/dlq-release-fine-clock/`: 21 pairs for `ack-one`, seven elsewhere, with exact sources, dependencies, instrumentation, environment and raw measurements retained. Source/reason fields are exact. Numeric regression acceptance remains M4, including the fixed FIFO extension.
 - [x] M2 — Bounded browse/fetch, historical decoding and explicit physical registrations verified against released PGMQ 0.7.0.0 in the normal unflagged PostgreSQL suite on 2026-10-26. Tests compare all seven raw row fields, preserve invisible/malformed rows, cover 500-row lookahead, reject invalid requests before I/O, and verify separate-pool deadlines and setting cleanup.
 - [x] M3 — Default-off row-locked delete/send transactions verified on 2026-10-26 against released PGMQ 0.7.0.0, without a flag or temporary project. The clean final correctness suite passed 203 examples with zero failures, including 20 administration scenarios covering saved/missing/null headers, null payloads, normal handler input, concurrency, response-discard retry, rollback/recovery, cancellation, authorization and distinct topic fan-out copies.
 - [ ] M4 — Pass the numeric performance gates with retained baseline/candidate evidence, complete operator documentation and durable records, and pass the final released-dependency build and test checks.
@@ -91,7 +91,7 @@ Resume, 2026-10-26: verified Hackage publishes `pgmq-hasql 0.7.0.0` with `Pgmq.H
 
 Resume checkpoint, 2026-10-26: the released PGMQ 0.7.0.0 dependency is adopted, and the temporary `dlq-admin` flag has been removed from the library and tests. The normal unflagged PostgreSQL suite passes 203 examples with zero failures, including all 20 administration scenarios and the public embedding example. Haddock and strict bundle validations pass. A fresh `dist-dlq-release` build compiles all components; a reused build directory retained incompatible dependency identities (FRIC-2 in `docs/friction-log/`). The separate `shibuya-core 0.12.0.0` dependency update is now committed as `6241ed8` and is included in the final candidate.
 
-FRIC-1 is resolved by the published inspection release. The durable administration decisions remain in [ADR 0002](../adr/0002-managed-dlq-administration.md). The complete acceptance orchestrator now exists at `scripts/check-dlq-performance.py`, with common baseline-compatible worker instrumentation and candidate-only administration/encoding/read/retention measurements. Ten tests protect statistical ratio direction, incomplete evidence rejection, request failures and index-plan checks. Short smoke experiments are tooling diagnostics and always exit nonzero; they do not close any numeric gate.
+FRIC-1 is resolved by the published inspection release. The durable administration decisions remain in [ADR 0002](../adr/0002-managed-dlq-administration.md). The complete acceptance orchestrator now exists at `scripts/check-dlq-performance.py`, with common baseline-compatible worker instrumentation and candidate-only administration/encoding/read/retention measurements. Twelve tests protect statistical ratio direction, incomplete evidence rejection, request failures and index-plan checks. Short smoke experiments are tooling diagnostics and always exit nonzero; they do not close any numeric gate.
 
 This plan remains incomplete until the original/matched/candidate experiment passes every numeric gate. Preserve the fixed baseline and all failed/inconclusive runs. Final results, exact reproduction and retained artifact locations belong in `docs/performance/9-dlq-browse-and-redrive.md`. IR-3 remains proposed until complete acceptance; no external release or tag has been published by this plan.
 
@@ -325,3 +325,35 @@ bounds. `--extend-worker-from` implements this complete-data reassessment; no
 parent evidence is overwritten and no original gate or workload setting changes.
 The full parent matrix continues independently and may reveal other unresolved
 gates; a passing FIFO extension alone cannot close M4.
+
+
+Worker-control checkpoint, 2026-10-27: all 196 scheduled worker-control samples
+completed. Of the 45 worker gates, 44 passed; original-control FIFO p95 remains
+unresolved pending its predeclared complete-data extension. Direct and two-copy
+topic DLQ writes pass in both metadata modes. Shared-database operator load,
+encoding, reads/depth/retention and the final coherent release checks remain M4.
+
+
+Operator fixture checkpoint, 2026-10-27: both ordinary-worker load cases pass.
+The batch-size-one FIFO load fixture with the runner's default three-million-row
+source produced only 48–52 observations per minute, so all 14 short samples are
+inconclusive under the original 1,000-observation requirement. The plan prescribes
+a 100,000-row DLQ and enough source work to avoid depletion; it does not prescribe
+three million source rows. Set only this operator case's source fixture to
+100,000 rows, identically for idle and loaded runs. A standalone check produced
+1,532 observations, 98,270 remaining source rows and 660/660 successful calls.
+The required DLQ size, source body size, worker count, batch size, pools, admin
+arrival rates, durations and numeric limits remain fixed. The completed
+three-million-row `ack-fifo` worker comparison is retained for its declared
+extension; it is not replaced with this smaller operator fixture.
+
+Resume from `.dev/dlq-release-fine-clock/` into a fresh
+`.dev/dlq-release-resumed/` using `--resume-from` and
+`--case-seed-count fifo-load-one=100000`. Reuse every matching recorded sample,
+including failures, after verifying unchanged measured Haskell/Cabal/Nix source,
+tools and hardware. Changed arguments cannot reuse a sample. Keep the 14
+insufficient source-fixture samples in the parent bundle as diagnostics. The
+resumed result must still contain all required cases and all 198 numeric gates;
+resumption alone does not establish acceptance. After it finishes, the FIFO
+worker extension's parent is the resumed experiment, retaining its original seven
+pairs unchanged.

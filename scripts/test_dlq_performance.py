@@ -76,6 +76,33 @@ class PerformanceAcceptance(unittest.TestCase):
                 performance.extend_worker(SimpleNamespace(output=output, extend_worker_from=parent))
             self.assertFalse(output.exists())
 
+    def test_resume_retains_matching_invalid_evidence_without_rerunning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory) / "parent"
+            parent.mkdir()
+            artifact = parent / "0001-case.json"
+            artifact.write_text('{"valid":false}')
+            output = Path(directory) / "resumed"
+            output.mkdir()
+            experiment = performance.Experiment(output)
+            experiment.load_parent(parent, {"runs": [{"artifact": artifact.name, "arguments": ["scenario", 60, 3000000]}]})
+            with patch.object(performance.capture, "run_logged", side_effect=AssertionError("must reuse")):
+                self.assertFalse(experiment.measure("unused", ["scenario", 60, 3000000], "case")["valid"])
+            self.assertEqual(artifact.read_text(), '{"valid":false}')
+
+    def test_changed_fixture_cannot_reuse_old_measurement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory) / "parent"
+            parent.mkdir()
+            artifact = parent / "0001-case.json"
+            artifact.write_text('{"valid":true}')
+            output = Path(directory) / "resumed"
+            output.mkdir()
+            experiment = performance.Experiment(output)
+            experiment.load_parent(parent, {"runs": [{"artifact": artifact.name, "arguments": ["scenario", 60, 3000000]}]})
+            with patch.object(performance.capture, "run_logged", side_effect=RuntimeError("fresh measurement requested")), self.assertRaisesRegex(RuntimeError, "fresh measurement"):
+                experiment.measure("unused", ["scenario", 60, 100000], "case")
+
     def test_rejects_sequential_scans_and_sorts_below_limit(self):
         self.assertFalse(performance.plans_use_indexes([{"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Seq Scan"}]}}]))
         self.assertFalse(performance.plans_use_indexes([{"Plan": {"Node Type": "Sort"}}]))
