@@ -145,6 +145,7 @@ executable dlq-performance
   main-is: DlqPerformance.hs
   hs-source-dirs: app
   other-modules:
+    PerformanceClock
     PerformanceDatabase
     WorkerPerformance
 
@@ -194,6 +195,7 @@ executable dlq-admin-performance
   main-is: DlqAdminPerformance.hs
   hs-source-dirs: app
   other-modules:
+    PerformanceClock
     PerformanceDatabase
     WorkerPerformance
 

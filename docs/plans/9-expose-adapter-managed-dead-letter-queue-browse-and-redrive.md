@@ -64,6 +64,8 @@ Resume, 2026-10-26: verified Hackage publishes `pgmq-hasql 0.7.0.0` with `Pgmq.H
 
 2026-10-26 — A disposable database observed during a measured interval had an active `autovacuum: VACUUM ANALYZE pgmq.q_perf_source`, 1,308,804 estimated dead tuples, and two requested checkpoints with only one completed. Retain `.dev/dlq-autovacuum-diagnostic.log`. Bulk fixture setup was outside the timer, but automatic seed-triggered maintenance was not. This confounds paired measurements. Configure only disposable benchmark tables with automatic maintenance disabled, manually vacuum/analyze them and checkpoint before warmup, and retain maintenance counters/options with every worker result. Reject measurements with missing stabilization or unexpected automatic maintenance. Use identical preparation on original, matched and candidate; preserve all workload sizes/rates, pools, durations, runtime capabilities and numeric budgets. The prior full attempt is interrupted and retained; restart all comparisons after the shared instrumentation change.
 
+2026-10-26 — The stabilized attempt `.dev/dlq-release-stabilized/` passed five of six `ack-one` gates, including both throughput gates. Matched-control p95 remained unresolved at 1.107142857 versus the unchanged 1.10 budget. All sampled durations had a 1000ns common divisor. A direct 100,000-read clock diagnostic confirmed GHC's timer advances in 1000ns steps on this host, while Darwin raw monotonic time advances in approximately 41/42ns steps. Retain `.dev/check-dlq-clock.log`. Use the benchmark-only `PerformanceClock` module in original, matched and candidate; no production clock or dependency changes. This interface friction is FRIC-3 in `docs/friction-log/`.
+
 ## Decision Log
 
 
@@ -82,6 +84,8 @@ Resume, 2026-10-26: verified Hackage publishes `pgmq-hasql 0.7.0.0` with `Pgmq.H
 2026-10-25 — Temporarily guard the administration exports and spec with the manual, default-off Cabal flag `dlq-admin`. This keeps the normal released-dependency build usable while allowing the explicitly permitted local integration proof. Before accepting M1/M4, remove this transitional flag, require the verified inspection release in both component bounds, and run the documented unflagged acceptance commands. The worker's queue-aware writer does not require the flag.
 
 2026-10-26 — Preserve the original numeric gates, as explicitly reaffirmed by the user after the first failing case. Control asynchronous fixture-maintenance timing uniformly in the disposable benchmark setup; this is an experiment reproducibility correction, not a production database policy or a relaxation of acceptance.
+
+2026-10-26 — Use raw monotonic timing on Darwin for sub-microsecond measurement precision. Before restarting with the corrected timer, fix the short-latency `ack-one` sample count at 21 pairs, with seven pairs for the other cases. Both satisfy the original minimum of seven. This is a predeclared complete sample count, not optional stopping or selecting favorable samples; run all 21 even if an earlier bound passes. Retain every prior experiment and every new pair. All original numeric budgets, workload rates, fixtures, pools, runtime capabilities and per-run warmup/sample durations remain unchanged.
 
 ## Outcomes & Retrospective
 

@@ -16,7 +16,6 @@ import Data.List (sort)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
 import Data.Vector qualified as V
-import GHC.Clock (getMonotonicTimeNSec)
 import GHC.Stats (allocated_bytes, gc, gcdetails_live_bytes, getRTSStats, max_live_bytes)
 import Hasql.Decoders qualified as D
 import Hasql.Encoders qualified as E
@@ -25,6 +24,7 @@ import Hasql.Session qualified as S
 import Hasql.Statement qualified as St
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TS
+import PerformanceClock (getMonotonicTimeNSec)
 import PerformanceDatabase (configureBenchmarkQueue, runPgmqSession, stabilizeBenchmarkQueues, withPgmqDb)
 import Pgmq.Hasql.Sessions qualified as Q
 import Pgmq.Hasql.Statements.Inspection qualified as Inspection

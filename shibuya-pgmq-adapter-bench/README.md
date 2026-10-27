@@ -281,3 +281,11 @@ and a checkpoint before warmup so seed-triggered maintenance does not overlap
 paired intervals unpredictably. Worker artifacts retain maintenance settings and
 counters, and the acceptance checker rejects missing or uncontrolled setup. This
 controlled configuration is not a production database maintenance recommendation.
+
+
+The single-worker `ack-one` case uses a fixed 21 pairs by default
+(`--ack-one-pairs 21`) because its latency budget is only a few microseconds;
+other cases use `--pairs` (minimum seven). The count is chosen before measurement
+and never shortened after a favorable bound. On Darwin, shared benchmark
+instrumentation uses `clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)` rather than the
+host runtime's microsecond-quantized clock. Other platforms retain the GHC clock.

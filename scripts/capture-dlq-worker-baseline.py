@@ -21,7 +21,7 @@ SCENARIOS = (
     "dlq-direct-small", "dlq-topic-meta", "dlq-topic-small",
 )
 BENCH = "shibuya-pgmq-adapter-bench"
-INSTRUMENTATION = (f"{BENCH}/app/DlqPerformance.hs", f"{BENCH}/app/PerformanceDatabase.hs", f"{BENCH}/app/WorkerPerformance.hs")
+INSTRUMENTATION = (f"{BENCH}/app/DlqPerformance.hs", f"{BENCH}/app/PerformanceDatabase.hs", f"{BENCH}/app/WorkerPerformance.hs", f"{BENCH}/app/PerformanceClock.hs")
 
 
 def query(args, cwd):

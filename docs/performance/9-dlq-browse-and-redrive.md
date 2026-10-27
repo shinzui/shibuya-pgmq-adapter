@@ -224,3 +224,25 @@ configuration, not a production maintenance recommendation or a production SLO.
 The budgets, workload sizes/rates, pools, durations and runtime capabilities are
 unchanged. All comparisons must restart after this common instrumentation change;
 no favorable subset of the earlier samples is reused.
+
+
+## Clock precision and fixed sample counts
+
+The first stabilized seven-pair case passed five of six gates. Only matched p95
+remained unresolved (upper bound 1.107142857; budget 1.10). Its recorded durations
+were all multiples of 1000ns. A direct 100,000-read diagnostic confirmed the GHC
+runtime timer's 1000ns quantization on this host; Darwin
+`clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)` instead observed 41/42ns steps.
+Retain `.dev/check-dlq-clock.log` and the failed stabilized attempt, and see FRIC-3
+in `docs/friction-log/`. The system SDK `_time.h` declares the API, and the
+[GHC 9.12.4 timing implementation](https://raw.githubusercontent.com/ghc/ghc/ghc-9.12.4-release/rts/posix/GetTime.c)
+selects the platform monotonic clock when available.
+
+`PerformanceClock` now supplies the raw monotonic clock on Darwin, with the GHC
+clock elsewhere. The same module is applied to both worker controls and the
+candidate. No old coarse-clock samples are reused. The short-latency `ack-one`
+case has a fixed, predeclared 21 pairs (`--ack-one-pairs 21`); all other cases
+retain seven pairs. All 21 must finish even if an earlier bound would pass.
+The original minimum is seven; budgets and per-run durations are unchanged.
+The fine-clock candidate check observed 0.030959ms p95 with one-nanosecond common
+divisor across its recorded deltas; it is diagnostic, not acceptance.

@@ -12,13 +12,13 @@ import Data.List (sort)
 import Data.Text qualified as Text
 import Effectful (liftIO, runEff)
 import Effectful.Error.Static (runErrorNoCallStack)
-import GHC.Clock (getMonotonicTimeNSec)
 import GHC.Stats (allocated_bytes, getRTSStats)
 import Hasql.Decoders qualified as D
 import Hasql.Encoders qualified as E
 import Hasql.Pool qualified as Pool
 import Hasql.Session qualified as Session
 import Hasql.Statement qualified as Statement
+import PerformanceClock (clockName, getMonotonicTimeNSec)
 import PerformanceDatabase (configureBenchmarkQueue, runPgmqSession, stabilizeBenchmarkQueues, withPgmqPools)
 import Pgmq.Effectful (PgmqRuntimeError, runPgmq)
 import Pgmq.Hasql.Sessions qualified as Sessions
@@ -158,6 +158,7 @@ runWorker scenario warmup sample seeds prepare = do
           "databaseIOCounters" .= databaseIO,
           "maintenance" .= maintenance,
           "administration" .= adminResult,
+          "clock" .= clockName,
           "databaseSettings" .= databaseSettings,
           "scenario" .= scenario,
           "warmupSeconds" .= warmup,

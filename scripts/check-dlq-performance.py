@@ -199,6 +199,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-ref", required=True)
     parser.add_argument("--pairs", type=int, default=7)
+    parser.add_argument("--ack-one-pairs", type=int, default=21, help="fixed sample count for the short-latency single-worker case; never stop early on a favorable bound")
     parser.add_argument("--warmup-seconds", type=int, default=10)
     parser.add_argument("--sample-seconds", type=int, default=60)
     parser.add_argument("--seed-count", type=int, default=3_000_000)
@@ -207,7 +208,7 @@ def main():
     args = parser.parse_args()
     if not args.smoke and (args.pairs < 7 or args.warmup_seconds < 10 or args.sample_seconds < 60):
         parser.error("acceptance requires >=7 pairs, >=10s warmup and >=60s samples")
-    if args.pairs < 1 or args.warmup_seconds < 0 or args.sample_seconds < 1 or args.seed_count < 1000:
+    if args.pairs < 1 or args.ack_one_pairs < 1 or args.warmup_seconds < 0 or args.sample_seconds < 1 or args.seed_count < 1000:
         parser.error("invalid experiment size")
     output = args.output.resolve()
     if not output.is_relative_to(ROOT / ".dev"):
@@ -252,7 +253,10 @@ def main():
         # against BOTH controls; all three run sequentially on fresh fixtures.
         for scenario in SCENARIOS:
             data = {k: [] for k in ("original", "matched", "candidate", "none")}
-            for pair in range(args.pairs):
+            worker_pairs = args.pairs
+            if not args.smoke and scenario == "ack-one":
+                worker_pairs = max(args.pairs, args.ack_one_pairs)
+            for pair in range(worker_pairs):
                 order = ["original", "matched", "candidate"] + (["none"] if scenario == "ack-four" else [])
                 if pair % 2:
                     order.reverse()
