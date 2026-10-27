@@ -289,3 +289,12 @@ other cases use `--pairs` (minimum seven). The count is chosen before measuremen
 and never shortened after a favorable bound. On Darwin, shared benchmark
 instrumentation uses `clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)` rather than the
 host runtime's microsecond-quantized clock. Other platforms retain the GHC clock.
+
+
+For a fixed-count worker extension, use `--extend-worker-from <finished-output>
+--worker-scenario <case> --worker-pairs <fixed-total>` with a new `--output`.
+Declare the total before collecting additional observations. The checker retains
+all previous pairs, verifies unchanged measured source/tool/hardware identities,
+reuses immutable binaries, and recomputes the selected case over the entire data
+set. It refuses a running parent to preserve sequential measurements and retains
+all unrelated gates and the superseded initial bounds in the combined result.

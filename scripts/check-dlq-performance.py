@@ -73,7 +73,7 @@ def worker_gates(name, controls, candidates, dlq=False, loaded=False):
     if loaded:
         for run in candidates:
             admin = run["administration"]
-            if admin["successful"] / admin["scheduled"] < 0.99 or admin["completed"] != admin["scheduled"] or admin["failed"]:
+            if admin["successful"] / admin["scheduled"] < 0.99 or admin["completed"] != admin["scheduled"]:
                 gates.append({"name": name + "/admin-completion", "status": "FAIL", "counts": admin})
     return gates
 
@@ -195,6 +195,113 @@ def plans_use_indexes(value):
                     and "msg_id" in node.get("Index Cond", "") for node in nodes))
 
 
+def extend_worker(args):
+    output = args.output.resolve()
+    if output.exists():
+        raise ValueError("refusing an existing extension output directory")
+    try:
+        return _extend_worker(args)
+    except BaseException as error:
+        if output.is_dir():
+            result_path = output / "result.json"
+            result = json.loads(result_path.read_text()) if result_path.exists() else {"runs": [], "gates": []}
+            result["status"] = "INCONCLUSIVE"
+            write_json(result_path, result)
+            (output / "error.txt").write_text(repr(error) + "\n")
+        raise
+
+
+def _extend_worker(args):
+    """One fixed extension, retaining every original pair and immutable binary.
+
+    It runs only after the parent experiment finishes, so the two workloads
+    cannot contaminate each other. It never replaces or edits parent evidence.
+    """
+    parent = args.extend_worker_from.resolve()
+    if not parent.is_relative_to(ROOT / ".dev"):
+        raise ValueError("parent experiment must be under this checkout's .dev")
+    result_path = parent / "result.json"
+    parent_bytes = result_path.read_bytes()
+    previous = json.loads(parent_bytes)
+    if previous["status"] == "RUNNING":
+        raise ValueError("wait for the complete parent experiment before extending")
+    if args.smoke or not args.worker_scenario:
+        raise ValueError("extension requires an explicit worker scenario and cannot use smoke mode")
+    environment = json.loads((parent / "environment.json").read_text())
+    baseline = capture.query(["git", "rev-parse", args.baseline_ref + "^{commit}"], ROOT)
+    if environment["baselineCommit"] != baseline:
+        raise ValueError("baseline identity differs from parent experiment")
+    for name, command in (("ghc", ["ghc", "--numeric-version"]), ("postgresql", ["postgres", "--version"]), ("cabal", ["cabal", "--version"])):
+        if capture.query(command, ROOT) != environment[name]:
+            raise ValueError(name + " differs from parent experiment")
+    for relative, digest in json.loads((parent / "candidate-sha256.json").read_text()).items():
+        path = ROOT / relative
+        if path.suffix in (".hs", ".cabal", ".nix") or path.name in ("cabal.project", "flake.lock"):
+            if not path.exists() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                raise ValueError("measured source/constraints changed: " + relative)
+    if environment["machine"] != platform.machine() or environment["cpuCount"] != os.cpu_count():
+        raise ValueError("hardware differs from parent experiment")
+    if environment.get("hardware") and capture.query(["sysctl", "hw.model", "hw.memsize", "machdep.cpu.brand_string"], ROOT) != environment["hardware"]:
+        raise ValueError("hardware differs from parent experiment")
+    scenario = args.worker_scenario
+    data = {kind: [] for kind in ("original", "matched", "candidate")}
+    for run in previous["runs"]:
+        arguments = run["arguments"]
+        if arguments[0] == scenario or arguments[:2] == ["worker", scenario]:
+            for kind in data:
+                if "-" + kind + "-" in Path(run["artifact"]).name:
+                    record = json.loads((parent / run["artifact"]).read_text())
+                    data[kind].append(record)
+                    break
+    counts = {len(rows) for rows in data.values()}
+    if len(counts) != 1 or min(counts) < 7 or args.worker_pairs <= max(counts):
+        raise ValueError("require complete original pairs and a larger fixed total")
+    original_count = counts.pop()
+    parent_arguments = environment["arguments"]
+    for name in ("warmup_seconds", "sample_seconds", "seed_count"):
+        if getattr(args, name) != parent_arguments[name]:
+            raise ValueError("workload setting differs from parent: " + name)
+    output = args.output.resolve()
+    if not output.is_relative_to(ROOT / ".dev"):
+        raise ValueError("output must be under this checkout's .dev")
+    output.mkdir(parents=True, exist_ok=False)
+    experiment = Experiment(output)
+    write_json(output / "environment.json", {**environment,
+        "extension": {"parent": str(parent), "parentResultSha256": hashlib.sha256(parent_bytes).hexdigest(),
+                      "scenario": scenario, "existingPairs": original_count, "fixedTotalPairs": args.worker_pairs}})
+    binaries = {}
+    for kind in data:
+        target = "dlq-admin-performance" if kind == "candidate" else "dlq-performance"
+        binaries[kind] = next(path for path in (parent / (kind + "-source") / "dist-performance").rglob(target)
+                              if path.is_file() and os.access(path, os.X_OK))
+    for pair in range(original_count, args.worker_pairs):
+        order = ["original", "matched", "candidate"]
+        if pair % 2:
+            order.reverse()
+        for kind in order:
+            arguments = [scenario, args.warmup_seconds, args.sample_seconds, args.seed_count]
+            if kind == "candidate":
+                arguments = ["worker", *arguments, "idle"]
+            data[kind].append(experiment.measure(str(binaries[kind]), arguments,
+                                               f"worker-{scenario}-{kind}-{pair + 1}"))
+    replacements = []
+    for kind in ("original", "matched"):
+        replacements += worker_gates(scenario + "/" + kind, data[kind], data["candidate"], scenario.startswith("dlq"))
+    names = {gate["name"] for gate in replacements}
+    superseded = [gate for gate in previous["gates"] if gate["name"] in names]
+    if len(superseded) != len(replacements):
+        raise ValueError("parent comparison gates are incomplete")
+    combined = [gate for gate in previous["gates"] if gate["name"] not in names] + replacements
+    status = "PASS" if len(combined) >= 198 and all(gate["status"] == "PASS" for gate in combined) else "FAIL"
+    write_json(output / "result.json", {"status": status, "bootstrapSeed": SEED, "bootstrapResamples": 10000,
+        "parentExperiment": str(parent), "parentResultSha256": hashlib.sha256(parent_bytes).hexdigest(),
+        "extendedScenario": scenario, "fixedTotalPairs": args.worker_pairs, "supersededGates": superseded,
+        "gates": combined, "runs": [{**run, "artifact": str(parent / run["artifact"])} for run in previous["runs"]]
+                    + [{**run, "artifact": str(output / run["artifact"])} for run in experiment.runs]})
+    print("DLQ-PERFORMANCE: " + status, flush=True)
+    return 0 if status == "PASS" else 1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-ref", required=True)
@@ -205,11 +312,18 @@ def main():
     parser.add_argument("--seed-count", type=int, default=3_000_000)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--smoke", action="store_true", help="short diagnostic; always INCONCLUSIVE")
+    parser.add_argument("--extend-worker-from", type=Path, help="finished parent experiment; retain all of its pairs")
+    parser.add_argument("--worker-scenario", choices=SCENARIOS)
+    parser.add_argument("--worker-pairs", type=int, default=21, help="fixed total pairs for one extension; no early stopping")
     args = parser.parse_args()
     if not args.smoke and (args.pairs < 7 or args.warmup_seconds < 10 or args.sample_seconds < 60):
         parser.error("acceptance requires >=7 pairs, >=10s warmup and >=60s samples")
     if args.pairs < 1 or args.ack_one_pairs < 1 or args.warmup_seconds < 0 or args.sample_seconds < 1 or args.seed_count < 1000:
         parser.error("invalid experiment size")
+    if args.extend_worker_from:
+        return extend_worker(args)
+    if args.worker_scenario:
+        parser.error("--worker-scenario requires --extend-worker-from")
     output = args.output.resolve()
     if not output.is_relative_to(ROOT / ".dev"):
         parser.error("output must be under this checkout's .dev directory")

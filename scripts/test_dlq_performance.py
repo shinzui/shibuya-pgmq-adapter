@@ -2,6 +2,9 @@
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import patch
 import unittest
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -40,11 +43,38 @@ class PerformanceAcceptance(unittest.TestCase):
         with self.assertRaises(ValueError):
             performance.worker_gates("maintenance", [run] * 7, [run] * 7)
 
+    def test_operator_gate_allows_the_planned_one_percent_failure_budget(self):
+        before = dict(valid=True, throughput=100, p95Ms=1, maintenance=MAINTENANCE)
+        after = dict(before, administration=dict(scheduled=660, successful=659, completed=660, failed=1))
+        results = performance.worker_gates("operator", [before] * 7, [after] * 7, loaded=True)
+        self.assertTrue(all(row["status"] == "PASS" for row in results))
+
     def test_failed_operator_requests_cannot_pass(self):
         before = dict(valid=True, throughput=100, p95Ms=1, maintenance=MAINTENANCE)
         after = dict(before, administration=dict(scheduled=660, successful=650, completed=660, failed=10))
         results = performance.worker_gates("operator", [before] * 7, [after] * 7, loaded=True)
         self.assertTrue(any(row["status"] == "FAIL" for row in results))
+
+    def test_extension_never_overwrites_previous_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            result = output / "result.json"
+            result.write_text('{"status":"PASS"}')
+            with self.assertRaises(ValueError):
+                performance.extend_worker(SimpleNamespace(output=output))
+            self.assertEqual(result.read_text(), '{"status":"PASS"}')
+            self.assertFalse((output / "error.txt").exists())
+
+    def test_extension_cannot_overlap_the_parent_experiment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = root / ".dev/parent"
+            parent.mkdir(parents=True)
+            (parent / "result.json").write_text('{"status":"RUNNING"}')
+            output = root / ".dev/extension"
+            with patch.object(performance, "ROOT", root), self.assertRaises(ValueError):
+                performance.extend_worker(SimpleNamespace(output=output, extend_worker_from=parent))
+            self.assertFalse(output.exists())
 
     def test_rejects_sequential_scans_and_sorts_below_limit(self):
         self.assertFalse(performance.plans_use_indexes([{"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Seq Scan"}]}}]))

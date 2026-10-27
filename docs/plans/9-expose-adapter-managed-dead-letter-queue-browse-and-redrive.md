@@ -91,7 +91,7 @@ Resume, 2026-10-26: verified Hackage publishes `pgmq-hasql 0.7.0.0` with `Pgmq.H
 
 Resume checkpoint, 2026-10-26: the released PGMQ 0.7.0.0 dependency is adopted, and the temporary `dlq-admin` flag has been removed from the library and tests. The normal unflagged PostgreSQL suite passes 203 examples with zero failures, including all 20 administration scenarios and the public embedding example. Haddock and strict bundle validations pass. A fresh `dist-dlq-release` build compiles all components; a reused build directory retained incompatible dependency identities (FRIC-2 in `docs/friction-log/`). The separate `shibuya-core 0.12.0.0` dependency update is now committed as `6241ed8` and is included in the final candidate.
 
-FRIC-1 is resolved by the published inspection release. The durable administration decisions remain in [ADR 0002](../adr/0002-managed-dlq-administration.md). The complete acceptance orchestrator now exists at `scripts/check-dlq-performance.py`, with common baseline-compatible worker instrumentation and candidate-only administration/encoding/read/retention measurements. Seven tests protect statistical ratio direction, incomplete evidence rejection, request failures and index-plan checks. Short smoke experiments are tooling diagnostics and always exit nonzero; they do not close any numeric gate.
+FRIC-1 is resolved by the published inspection release. The durable administration decisions remain in [ADR 0002](../adr/0002-managed-dlq-administration.md). The complete acceptance orchestrator now exists at `scripts/check-dlq-performance.py`, with common baseline-compatible worker instrumentation and candidate-only administration/encoding/read/retention measurements. Ten tests protect statistical ratio direction, incomplete evidence rejection, request failures and index-plan checks. Short smoke experiments are tooling diagnostics and always exit nonzero; they do not close any numeric gate.
 
 This plan remains incomplete until the original/matched/candidate experiment passes every numeric gate. Preserve the fixed baseline and all failed/inconclusive runs. Final results, exact reproduction and retained artifact locations belong in `docs/performance/9-dlq-browse-and-redrive.md`. IR-3 remains proposed until complete acceptance; no external release or tag has been published by this plan.
 
@@ -303,3 +303,25 @@ Revision note, 2026-10-25: added required baseline capture, numeric performance 
 Revision note, 2026-10-26: refreshed dependency discovery after the 0.7.0.0 release and adoption; resume unflagged acceptance and the original numeric performance gates without temporary dependency overrides. Historical checkpoints above describe their original evidence, not current release availability.
 
 Measurement checkpoint: the first full attempt at `.dev/dlq-release-25cb519/` was interrupted after eight completed samples to replace payload-marker classification with the required source-ID boundary in common instrumentation. Retain those diagnostic samples; restart the complete experiment with identical corrected instrumentation on both controls and candidate. No passing numeric result is claimed from this interrupted attempt.
+
+
+Active acceptance checkpoint: candidate `d4dfba1` is running the full fixed-count
+experiment in `.dev/dlq-release-fine-clock/` (21 pairs for `ack-one`, seven for
+other cases). All six `ack-one` gates passed after all 63 samples completed.
+Remaining worker, operator-load, serialization, read-depth and retention gates
+still block M4; M1 awaits complete worker controls. Do not reuse an interrupted
+coarse-clock experiment or infer overall acceptance from the first case.
+
+
+FIFO acceptance checkpoint: the first seven fine-clock pairs passed five of six
+FIFO gates. Original-control p95 has median ratio 1.082919 but upper bound
+1.136174 against the unchanged 1.10 budget; matched p95, both throughput and both
+allocation gates pass. Before collecting any more FIFO data, fix one extension
+to 21 total pairs, retaining all seven existing pairs and adding all 14 further
+pairs without early stopping. The extension must wait for the parent matrix to
+finish, reuse its immutable original/matched/candidate binaries, verify source,
+dependency/tool and hardware identities, and retain both the initial and final
+bounds. `--extend-worker-from` implements this complete-data reassessment; no
+parent evidence is overwritten and no original gate or workload setting changes.
+The full parent matrix continues independently and may reveal other unresolved
+gates; a passing FIFO extension alone cannot close M4.

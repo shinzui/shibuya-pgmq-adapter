@@ -2,7 +2,9 @@
 
 Plan: [ExecPlan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md).
 
-Status: **incomplete**. No numeric performance gate has passed. PGMQ 0.7.0.0 now supplies the released
+Status: **incomplete**. The fine-clock experiment has passed all six `ack-one`
+gates across the complete, predeclared 21 pairs. The rest of the matrix remains
+in progress; no overall performance PASS is claimed. PGMQ 0.7.0.0 now supplies the released
 inspection dependency. The complete paired candidate,
 matched-dependency, administrative-load, large-queue, allocation and retained-heap
 matrix has not been measured. Ordinary, unlogged and partitioned queues have no
@@ -167,7 +169,7 @@ leave M4 open; none may be relaxed without the user's scope decision.
 
 The unflagged PostgreSQL suite passes 203 examples, including 20 administration
 scenarios, with PGMQ 0.7.0.0 and Shibuya core 0.12.0.0. All components build in
-`dist-dlq-release` and Haddock succeeds. Seven Python tests protect acceptance
+`dist-dlq-release` and Haddock succeeds. Ten Python tests protect acceptance
 ratios and fail-closed evidence checks. These are correctness/tooling evidence.
 The full measured acceptance result remains pending.
 
@@ -246,3 +248,46 @@ retain seven pairs. All 21 must finish even if an earlier bound would pass.
 The original minimum is seven; budgets and per-run durations are unchanged.
 The fine-clock candidate check observed 0.030959ms p95 with one-nanosecond common
 divisor across its recorded deltas; it is diagnostic, not acceptance.
+
+
+## Active final-candidate experiment
+
+Candidate `d4dfba1`, unchanged shared raw-clock instrumentation, released
+dependencies, fixed original source `e06e64b268055aca4eff78caabd1b0eb73aa1cd1`:
+
+```bash
+nix develop --no-write-lock-file -c python3 scripts/check-dlq-performance.py \
+  --baseline-ref e06e64b268055aca4eff78caabd1b0eb73aa1cd1 \
+  --pairs 7 --ack-one-pairs 21 --warmup-seconds 10 --sample-seconds 60 \
+  --output .dev/dlq-release-fine-clock
+```
+
+Artifacts: `.dev/dlq-release-fine-clock/`; top-level progress log:
+`.dev/dlq-release-fine-clock.log`. All six `ack-one` gates passed after all 63
+original/matched/candidate samples completed. Other worker, operator-load,
+encoding, read-depth and retention gates are still pending. `result.json` is the
+machine-readable running result, not a complete acceptance certificate.
+
+
+FIFO's first seven pairs passed five of six gates; original-control p95 remained
+unresolved (median 1.082919, upper bound 1.136174, limit 1.10). A single extension
+to a fixed 21 total pairs is declared before additional data collection. All
+seven original pairs remain included. After the parent experiment finishes,
+run the following once; it reuses verified immutable binaries and identical
+settings, adds all 14 further pairs and retains the initial gates alongside the
+final all-pairs reassessment:
+
+```bash
+nix develop --no-write-lock-file -c python3 scripts/check-dlq-performance.py \
+  --baseline-ref e06e64b268055aca4eff78caabd1b0eb73aa1cd1 \
+  --extend-worker-from .dev/dlq-release-fine-clock \
+  --worker-scenario ack-fifo --worker-pairs 21 \
+  --output .dev/dlq-release-fifo-extension
+```
+
+The extension refuses a running parent, changed measured Haskell/Cabal sources,
+changed tools or hardware, missing pairs, and an existing output directory. Its
+combined result keeps every unrelated parent gate, so it cannot turn another
+failed or incomplete case into an overall PASS. The checker also enforces the
+original operator success budget (at least 99%, with drained backlog); a boundary
+test prevents accidentally requiring 100% success. No measurement is discarded.
