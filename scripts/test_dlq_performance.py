@@ -55,6 +55,14 @@ class PerformanceAcceptance(unittest.TestCase):
         results = performance.worker_gates("operator", [before] * 7, [after] * 7, loaded=True)
         self.assertTrue(any(row["status"] == "FAIL" for row in results))
 
+    def test_encoding_absolute_time_allowance_and_allocation_boundary(self):
+        old = [{"reason": str(i), "bodyBytes": 100, "metadata": False, "nsPerOp": 1000,
+                "allocatedPerOp": 1000, "sourceFieldBytes": 31} for i in range(30)]
+        allowed = [dict(case, nsPerOp=1400, allocatedPerOp=3172) for case in old]
+        self.assertTrue(all(gate["status"] == "PASS" for gate in performance.encoding_gates({"current": [old]*7, "aware": [allowed]*7})))
+        excessive = [dict(case, nsPerOp=1501, allocatedPerOp=3173) for case in old]
+        self.assertTrue(all(gate["status"] == "FAIL" for gate in performance.encoding_gates({"current": [old]*7, "aware": [excessive]*7})))
+
     def test_extension_never_overwrites_previous_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)

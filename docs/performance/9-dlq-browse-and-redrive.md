@@ -170,7 +170,7 @@ leave M4 open; none may be relaxed without the user's scope decision.
 
 The unflagged PostgreSQL suite passes 203 examples, including 20 administration
 scenarios, with PGMQ 0.7.0.0 and Shibuya core 0.12.0.0. All components build in
-`dist-dlq-release` and Haddock succeeds. Twelve Python tests protect acceptance
+`dist-dlq-release` and Haddock succeeds. Thirteen Python tests protect acceptance
 ratios and fail-closed evidence checks. These are correctness/tooling evidence.
 The full measured acceptance result remains pending.
 
@@ -325,3 +325,33 @@ new measurements. All parent evidence remains intact, and every required gate
 is recomputed over its complete prescribed pairs. After this resumed parent
 finishes, use it (not the incomplete initial parent) as `--extend-worker-from`
 for the already declared FIFO extension to 21 pairs.
+
+
+## Fixed complete encoding extension
+
+All allocation gates and exact source-field byte checks pass. Nine of the 30
+time bounds cross their normalized limit of one; every affected median remains
+within budget. All original seven pairs remain retained. Before additional
+collection, fix the complete encoding matrix at exactly 21 pairs, adding every
+one of the 14 further pairs across all reasons, metadata modes and body sizes.
+The shared evaluator exactly reproduces the original 60 gate results.
+
+After the resumed parent finishes, run:
+
+```bash
+nix develop --no-write-lock-file -c python3 scripts/check-dlq-performance.py \
+  --baseline-ref e06e64b268055aca4eff78caabd1b0eb73aa1cd1 \
+  --extend-encoding-from .dev/dlq-release-resumed --encoding-pairs 21 \
+  --output .dev/dlq-release-encoding-extension
+nix develop --no-write-lock-file -c python3 scripts/check-dlq-performance.py \
+  --baseline-ref e06e64b268055aca4eff78caabd1b0eb73aa1cd1 \
+  --extend-worker-from .dev/dlq-release-encoding-extension \
+  --worker-scenario ack-fifo --worker-pairs 21 \
+  --output .dev/dlq-release-fifo-extension
+```
+
+Each stage preserves the preceding complete result and every unrelated gate,
+links verified immutable source/binaries/dependency evidence, and retains initial
+bounds in `supersededGates`. A stage reporting FAIL may still carry an unrelated
+unresolved gate; the final combined result must pass all 198. No further sample
+extension or changed limit is authorized by this declaration.

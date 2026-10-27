@@ -314,3 +314,11 @@ Failed matching samples are retained too: unchanged settings cannot silently
 retry a failure. `--case-seed-count SCENARIO=ROWS` fixes source counts for a case
 on both sides of every pair. The parent bundle remains unchanged and all other
 workload and acceptance requirements still apply.
+
+
+`--extend-encoding-from <finished-output> --encoding-pairs <fixed-total>` extends
+the entire encoding matrix, retaining every original pair and adding every case
+in every additional pair. The default total is 21. Extensions carry frozen
+metadata and a complete gate history, so a subsequent worker extension can use
+the encoding extension as its parent. Declare counts before collecting data;
+never stop early after a favorable intermediate bound.

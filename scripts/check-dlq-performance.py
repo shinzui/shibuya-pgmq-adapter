@@ -78,6 +78,47 @@ def worker_gates(name, controls, candidates, dlq=False, loaded=False):
     return gates
 
 
+def encoding_gates(encoding):
+    if len(encoding["current"]) < 7 or len(encoding["current"]) != len(encoding["aware"]) or any(len(cases) != 30 for runs in encoding.values() for cases in runs):
+        raise ValueError("incomplete encoding matrix")
+    gates = []
+    for index in range(30):
+        old = [cases[index] for cases in encoding["current"]]
+        new = [cases[index] for cases in encoding["aware"]]
+        identities = {(case["reason"], case["bodyBytes"], case["metadata"]) for case in old + new}
+        if len(identities) != 1:
+            raise ValueError("encoding fixture identities differ")
+        label = f"encoding/{old[0]['reason']}/{old[0]['bodyBytes']}/{old[0]['metadata']}"
+        gates += [gate(label + "/time", [c["nsPerOp"] / max(b["nsPerOp"] * 1.1, b["nsPerOp"] + 500) for b,c in zip(old,new)], 1),
+                  gate(label + "/allocation", [c["allocatedPerOp"] / (b["allocatedPerOp"] + 2048 + 4 * c["sourceFieldBytes"]) for b,c in zip(old,new)], 1)]
+    return gates
+
+
+def copy_frozen_metadata(parent, output):
+    for kind in ("original", "matched", "candidate"):
+        (output / (kind + "-source")).symlink_to((parent / (kind + "-source")).resolve(), target_is_directory=True)
+        shutil.copy2(parent / (kind + "-dependencies.json"), output / (kind + "-dependencies.json"))
+    for filename in ("candidate-sha256.json", "original-instrumentation.patch", "matched-compatibility.patch", "candidate-working.patch"):
+        shutil.copy2(parent / filename, output / filename)
+
+
+def publish_extension(experiment, previous, parent, replacements, details):
+    names = {gate["name"] for gate in replacements}
+    superseded = [gate for gate in previous["gates"] if gate["name"] in names]
+    if len(superseded) != len(replacements):
+        raise ValueError("parent comparison gates are incomplete")
+    combined = [gate for gate in previous["gates"] if gate["name"] not in names] + replacements
+    status = "PASS" if len(combined) >= 198 and all(gate["status"] == "PASS" for gate in combined) else "FAIL"
+    write_json(experiment.output / "result.json", {"status": status, "bootstrapSeed": SEED, "bootstrapResamples": 10000,
+        "parentExperiment": str(parent), "parentResultSha256": hashlib.sha256((parent / "result.json").read_bytes()).hexdigest(),
+        "extensionChain": previous.get("extensionChain", []) + [details],
+        "supersededGates": previous.get("supersededGates", []) + superseded, "gates": combined,
+        "runs": [{**run, "artifact": str(parent / run["artifact"])} for run in previous["runs"]]
+                + [{**run, "artifact": str(experiment.output / run["artifact"])} for run in experiment.runs]})
+    print("DLQ-PERFORMANCE: " + status, flush=True)
+    return 0 if status == "PASS" else 1
+
+
 def snapshot(output, name, ref=None):
     dest = output / (name + "-source")
     dest.mkdir()
@@ -241,12 +282,12 @@ def verify_frozen_parent(parent, baseline):
     return previous, environment
 
 
-def extend_worker(args):
+def protect_extension(args, action):
     output = args.output.resolve()
     if output.exists():
         raise ValueError("refusing an existing extension output directory")
     try:
-        return _extend_worker(args)
+        return action(args)
     except BaseException as error:
         if output.is_dir():
             result_path = output / "result.json"
@@ -255,6 +296,50 @@ def extend_worker(args):
             write_json(result_path, result)
             (output / "error.txt").write_text(repr(error) + "\n")
         raise
+
+
+def extend_worker(args):
+    return protect_extension(args, _extend_worker)
+
+
+def extend_encoding(args):
+    return protect_extension(args, _extend_encoding)
+
+
+def _extend_encoding(args):
+    parent = args.extend_encoding_from.resolve()
+    baseline = capture.query(["git", "rev-parse", args.baseline_ref + "^{commit}"], ROOT)
+    previous, environment = verify_frozen_parent(parent, baseline)
+    if args.smoke:
+        raise ValueError("encoding extension cannot use smoke mode")
+    for setting in ("warmup_seconds", "sample_seconds"):
+        if getattr(args, setting) != environment["arguments"][setting]:
+            raise ValueError("encoding duration differs from parent")
+    data = {"current": [], "aware": []}
+    for run in previous["runs"]:
+        arguments = run["arguments"]
+        if arguments[0] == "encoding":
+            data[arguments[1]].append(json.loads((parent / run["artifact"]).read_text())["cases"])
+    counts = {len(cases) for cases in data.values()}
+    if len(counts) != 1 or min(counts) < 7 or args.encoding_pairs <= max(counts):
+        raise ValueError("require complete encoding pairs and a larger fixed total")
+    original_count = counts.pop()
+    output = args.output.resolve()
+    if not output.is_relative_to(ROOT / ".dev"):
+        raise ValueError("extension output must be under .dev")
+    output.mkdir(parents=True, exist_ok=False)
+    experiment = Experiment(output)
+    details = {"kind": "encoding", "existingPairs": original_count, "fixedTotalPairs": args.encoding_pairs, "parent": str(parent)}
+    write_json(output / "environment.json", {**environment, "extension": details})
+    copy_frozen_metadata(parent, output)
+    binary = next(path for path in (parent / "candidate-source/dist-performance").rglob("dlq-admin-performance")
+                  if path.is_file() and os.access(path, os.X_OK))
+    for pair in range(original_count, args.encoding_pairs):
+        for mode in (["current", "aware"] if pair % 2 == 0 else ["aware", "current"]):
+            record = experiment.measure(str(binary), ["encoding", mode, args.warmup_seconds, args.sample_seconds],
+                                        f"encoding-{mode}-{pair + 1}")
+            data[mode].append(record["cases"])
+    return publish_extension(experiment, previous, parent, encoding_gates(data), details)
 
 
 def _extend_worker(args):
@@ -315,6 +400,7 @@ def _extend_worker(args):
     write_json(output / "environment.json", {**environment,
         "extension": {"parent": str(parent), "parentResultSha256": hashlib.sha256(parent_bytes).hexdigest(),
                       "scenario": scenario, "existingPairs": original_count, "fixedTotalPairs": args.worker_pairs}})
+    copy_frozen_metadata(parent, output)
     binaries = {}
     for kind in data:
         target = "dlq-admin-performance" if kind == "candidate" else "dlq-performance"
@@ -333,19 +419,9 @@ def _extend_worker(args):
     replacements = []
     for kind in ("original", "matched"):
         replacements += worker_gates(scenario + "/" + kind, data[kind], data["candidate"], scenario.startswith("dlq"))
-    names = {gate["name"] for gate in replacements}
-    superseded = [gate for gate in previous["gates"] if gate["name"] in names]
-    if len(superseded) != len(replacements):
-        raise ValueError("parent comparison gates are incomplete")
-    combined = [gate for gate in previous["gates"] if gate["name"] not in names] + replacements
-    status = "PASS" if len(combined) >= 198 and all(gate["status"] == "PASS" for gate in combined) else "FAIL"
-    write_json(output / "result.json", {"status": status, "bootstrapSeed": SEED, "bootstrapResamples": 10000,
-        "parentExperiment": str(parent), "parentResultSha256": hashlib.sha256(parent_bytes).hexdigest(),
-        "extendedScenario": scenario, "fixedTotalPairs": args.worker_pairs, "supersededGates": superseded,
-        "gates": combined, "runs": [{**run, "artifact": str(parent / run["artifact"])} for run in previous["runs"]]
-                    + [{**run, "artifact": str(output / run["artifact"])} for run in experiment.runs]})
-    print("DLQ-PERFORMANCE: " + status, flush=True)
-    return 0 if status == "PASS" else 1
+    return publish_extension(experiment, previous, parent, replacements,
+                             {"kind": "worker", "scenario": scenario, "existingPairs": original_count,
+                              "fixedTotalPairs": args.worker_pairs, "parent": str(parent)})
 
 
 def main():
@@ -360,6 +436,8 @@ def main():
     parser.add_argument("--smoke", action="store_true", help="short diagnostic; always INCONCLUSIVE")
     parser.add_argument("--resume-from", type=Path, help="retain every matching measurement from a finished parent")
     parser.add_argument("--case-seed-count", dest="case_seed_counts", action="append", default=[], help="fixed source fixture SCENARIO=ROWS (default fifo-load-one=100000)")
+    parser.add_argument("--extend-encoding-from", type=Path, help="extend every encoding case, retaining all parent pairs")
+    parser.add_argument("--encoding-pairs", type=int, default=21, help="fixed total encoding pairs for one extension")
     parser.add_argument("--extend-worker-from", type=Path, help="finished parent experiment; retain all of its pairs")
     parser.add_argument("--worker-scenario", choices=SCENARIOS)
     parser.add_argument("--worker-pairs", type=int, default=21, help="fixed total pairs for one extension; no early stopping")
@@ -375,6 +453,10 @@ def main():
             parser.error("invalid per-case source fixture: " + override)
         overrides[name] = int(value)
     args.case_seed_counts = overrides
+    if args.extend_encoding_from:
+        if args.resume_from or args.extend_worker_from:
+            parser.error("choose one resumption/extension mode")
+        return extend_encoding(args)
     if args.extend_worker_from:
         if args.resume_from:
             parser.error("choose resume or extension")
@@ -475,14 +557,7 @@ def main():
             for mode in (["current", "aware"] if pair % 2 == 0 else ["aware", "current"]):
                 encoding[mode].append(experiment.measure(binaries["candidate"], ["encoding", mode, warm, sample], f"encoding-{mode}-{pair + 1}")["cases"])
         if not args.smoke:
-            if any(len(cases) != 30 for runs in encoding.values() for cases in runs):
-                raise ValueError("incomplete encoding matrix")
-            for index in range(30):
-                old = [cases[index] for cases in encoding["current"]]
-                new = [cases[index] for cases in encoding["aware"]]
-                label = f"encoding/{old[0]['reason']}/{old[0]['bodyBytes']}/{old[0]['metadata']}"
-                experiment.gates += [gate(label + "/time", [c["nsPerOp"] / max(b["nsPerOp"] * 1.1, b["nsPerOp"] + 500) for b,c in zip(old,new)], 1),
-                    gate(label + "/allocation", [c["allocatedPerOp"] / (b["allocatedPerOp"] + 2048 + 4 * c["sourceFieldBytes"]) for b,c in zip(old,new)], 1)]
+            experiment.gates += encoding_gates(encoding)
         reads = {}
         for layout, depth, body in [(l,d,100) for l in ("ordinary","unlogged") for d in (100_000,1_000_000)] + [("ordinary",1000,100_000)]:
             data = {"raw": [], "adapter": []}

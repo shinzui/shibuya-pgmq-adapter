@@ -91,7 +91,7 @@ Resume, 2026-10-26: verified Hackage publishes `pgmq-hasql 0.7.0.0` with `Pgmq.H
 
 Resume checkpoint, 2026-10-26: the released PGMQ 0.7.0.0 dependency is adopted, and the temporary `dlq-admin` flag has been removed from the library and tests. The normal unflagged PostgreSQL suite passes 203 examples with zero failures, including all 20 administration scenarios and the public embedding example. Haddock and strict bundle validations pass. A fresh `dist-dlq-release` build compiles all components; a reused build directory retained incompatible dependency identities (FRIC-2 in `docs/friction-log/`). The separate `shibuya-core 0.12.0.0` dependency update is now committed as `6241ed8` and is included in the final candidate.
 
-FRIC-1 is resolved by the published inspection release. The durable administration decisions remain in [ADR 0002](../adr/0002-managed-dlq-administration.md). The complete acceptance orchestrator now exists at `scripts/check-dlq-performance.py`, with common baseline-compatible worker instrumentation and candidate-only administration/encoding/read/retention measurements. Twelve tests protect statistical ratio direction, incomplete evidence rejection, request failures and index-plan checks. Short smoke experiments are tooling diagnostics and always exit nonzero; they do not close any numeric gate.
+FRIC-1 is resolved by the published inspection release. The durable administration decisions remain in [ADR 0002](../adr/0002-managed-dlq-administration.md). The complete acceptance orchestrator now exists at `scripts/check-dlq-performance.py`, with common baseline-compatible worker instrumentation and candidate-only administration/encoding/read/retention measurements. Thirteen tests protect statistical ratio direction, incomplete evidence rejection, request failures and index-plan checks. Short smoke experiments are tooling diagnostics and always exit nonzero; they do not close any numeric gate.
 
 This plan remains incomplete until the original/matched/candidate experiment passes every numeric gate. Preserve the fixed baseline and all failed/inconclusive runs. Final results, exact reproduction and retained artifact locations belong in `docs/performance/9-dlq-browse-and-redrive.md`. IR-3 remains proposed until complete acceptance; no external release or tag has been published by this plan.
 
@@ -357,3 +357,19 @@ resumed result must still contain all required cases and all 198 numeric gates;
 resumption alone does not establish acceptance. After it finishes, the FIFO
 worker extension's parent is the resumed experiment, retaining its original seven
 pairs unchanged.
+
+
+Encoding checkpoint, 2026-10-27: all 30 encoding allocation gates and exact
+source-field byte-growth assertions pass. Nine timing upper bounds are unresolved,
+while all nine median normalized costs remain within the unchanged allowances.
+Before further encoding measurements, declare one extension of the entire
+30-case current/queue-aware matrix to exactly 21 pairs, retaining all seven
+existing pairs and adding all 14, with no early stopping or selected-case subset.
+The refactored evaluator reproduces all 60 retained gate results exactly.
+After `.dev/dlq-release-resumed/` finishes, create
+`.dev/dlq-release-encoding-extension/` with `--extend-encoding-from` and
+`--encoding-pairs 21`. Then run the declared FIFO worker extension against that
+combined result, using `--extend-worker-from .dev/dlq-release-encoding-extension`.
+Both extensions retain immutable measured binaries, original and superseded
+bounds, every observation and every unrelated gate. A failed extension remains
+unresolved; no further sample count or budget adjustment is implied.
