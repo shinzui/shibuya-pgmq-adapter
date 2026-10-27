@@ -244,10 +244,10 @@ topicDeadLetter  :: RoutingKey -> Bool -> DeadLetterConfig
 | Simple setup, no pgmq 1.11.0 | `directDeadLetter` |
 | Per-service DLQ routing | `topicDeadLetter` with service-specific patterns |
 
-## Browse, fetch, and redrive (implementation preview)
+## Browse, fetch, and redrive
 
-`Shibuya.Adapter.Pgmq.DeadLetter` provides an in-process API. Its exports and tests
-require the manual Cabal flag `-fdlq-admin`. The inspection statements are available
+`Shibuya.Adapter.Pgmq.DeadLetter` provides an in-process API in the normal build.
+The inspection statements are available
 in the released [`pgmq-hs`](mori://shinzui/pgmq-hs) 0.7.0.0 packages; no temporary
 source project is needed.
 Measured performance acceptance remains pending in
@@ -269,7 +269,7 @@ isolate PostgreSQL CPU, I/O or locks. No performance isolation claim is made unt
 the numeric gates in plan 9 have actual retained evidence.
 
 The following module compiles using public exports only; its source is also
-included in the flagged test component as `DeadLetterExample`:
+included in the normal test component as `DeadLetterExample`:
 
 ```haskell
 module DeadLetterExample (configureOrders, inspectOrders) where

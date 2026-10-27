@@ -22,3 +22,6 @@ CLAUDE.local.md
 .envrc.local
 result
 result-*
+
+# Python performance acceptance tooling
+__pycache__/

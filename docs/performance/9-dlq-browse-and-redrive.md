@@ -2,8 +2,8 @@
 
 Plan: [ExecPlan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md).
 
-Status: **incomplete**. No numeric performance gate has passed. The released
-inspection dependency is still unavailable, and the complete paired candidate,
+Status: **incomplete**. No numeric performance gate has passed. PGMQ 0.7.0.0 now supplies the released
+inspection dependency. The complete paired candidate,
 matched-dependency, administrative-load, large-queue, allocation and retained-heap
 matrix has not been measured. Ordinary, unlogged and partitioned queues have no
 validated performance budget from this work yet. Correctness tests and the
@@ -148,10 +148,9 @@ required dedicated repeated-encoding allocation loop or bootstrap comparison.
 
 ## Remaining acceptance
 
-After a suitable inspection release is verified, choose its actual dependency
-bounds, remove the temporary administration flag and run a released-dependency
-candidate. The full `scripts/check-dlq-performance.py` acceptance orchestrator is
-still to be implemented. It must retain both the original dependency baseline
+The released PGMQ 0.7.0.0 family is adopted and the temporary administration
+flag has been removed. The full `scripts/check-dlq-performance.py` acceptance
+orchestrator is implemented. It retains both the original dependency baseline
 and a matched released-dependency control; neither the local 0.7.0.0 integration
 proof nor the single baseline sample replaces these controls.
 
@@ -162,3 +161,25 @@ latency/backlog counts, 100k/1m ordinary and unlogged read fixtures, raw-read
 controls and actual query plans, and five-minute retained-heap measurements.
 Retain all paired runs and confidence bounds. Failed or inconclusive budgets
 leave M4 open; none may be relaxed without the user's scope decision.
+
+
+## Released-candidate implementation checkpoint
+
+The unflagged PostgreSQL suite passes 203 examples, including 20 administration
+scenarios, with PGMQ 0.7.0.0 and Shibuya core 0.12.0.0. All components build in
+`dist-dlq-release` and Haddock succeeds. Six Python tests protect acceptance
+ratios and fail-closed evidence checks. These are correctness/tooling evidence.
+The full measured acceptance result remains pending.
+
+The runner exports immutable source controls; the matched control's retained
+compatibility patch upgrades family constraints and populates the new
+`Ingested.deliveryStatus = pure DeliveryCurrent` field. It compares resolved
+shared dependency versions before measuring. Original-source production code
+receives no compatibility changes. Candidate comparisons initialize an idle
+administration handle, with a separate no-handle control. Read cases retain
+per-position/limit observations rather than pooling different workloads.
+
+Short smoke runs use fresh `.dev/dlq-smoke-20261026*` directories. Initial failed
+smokes exposed control-constraint and near-tail fixture mistakes in the new
+tooling; their logs remain available. Smoke mode always reports INCONCLUSIVE,
+including when every diagnostic executes successfully. It cannot produce PASS.

@@ -1,5 +1,8 @@
 # Capability catalog log
 
+## 2026-10-27
+* **Update**: Enable managed DLQ administration in the normal build against released PGMQ 0.7.0.0; preserve default-off redrive and distinguish correctness evidence from pending numeric performance acceptance.
+
 ## 2026-10-26
 * **Update**: Document the unreleased flagged DLQ administration preview, real PostgreSQL correctness evidence, and outstanding released-dependency and performance acceptance without expanding the shipped interface.
 

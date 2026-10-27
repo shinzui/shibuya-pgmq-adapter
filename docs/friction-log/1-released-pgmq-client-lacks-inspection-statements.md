@@ -6,12 +6,17 @@ generated:
   by: "codex-cli/gpt-6.1-sol"
   at: "2026-10-26T04:20:05Z"
 frictionId: FRIC-1
-status: logged
+status: "resolved"
 impact: blocked
 kind: interface
 origin: "mori://shinzui/shibuya-pgmq-adapter"
 affects: "mori://shinzui/pgmq-hs/packages/pgmq-hasql"
 plan: "docs/plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md"
+resolution: "Hackage pgmq-hasql 0.7.0.0 and upstream v0.7.0.0 now publish inspection statements; the repository adopts this released family."
+amended:
+  - by: "codex-cli/gpt-6.1-sol"
+    at: "2026-10-27T02:19:44Z"
+    change: "The inspection dependency is released; remove the temporary-source blocker while preserving performance acceptance."
 ---
 # Released PGMQ client lacks inspection statements
 

@@ -2,7 +2,7 @@
 title: "Dead-letter routing"
 type: Capability
 description: "Opt-in dead-letter handling that moves a failed or over-retried message to a target queue in one PostgreSQL transaction, preserving a queryable reason code and optional detail alongside the compatibility rendering."
-timestamp: "2026-10-26T04:36:51Z"
+timestamp: "2026-10-27T02:26:03Z"
 generated:
   by: codex/1.0
   at: "2026-08-10T21:15:04Z"
@@ -112,13 +112,13 @@ let config = (defaultConfig queueName)
   Topic routing multiplies encoding-adjacent network, WAL, and storage cost by
   every matching queue.
 
-## Unreleased administration preview
+## Managed DLQ administration
 
 The work in [plan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md)
 adds source identity to new envelopes and a separate
-`Shibuya.Adapter.Pgmq.DeadLetter` API behind the temporary manual `dlq-admin`
-Cabal flag. It requires unreleased upstream inspection sources and is not yet
-part of the default-build shipped interface listed above.
+`Shibuya.Adapter.Pgmq.DeadLetter` API in the normal build, using released
+PGMQ 0.7.0.0 inspection statements. Redrive remains disabled by default
+until the host explicitly enables its configuration gate.
 
 Real PostgreSQL evidence in
 [`DeadLetterSpec.hs`](../../shibuya-pgmq-adapter/test/Shibuya/Adapter/Pgmq/DeadLetterSpec.hs)

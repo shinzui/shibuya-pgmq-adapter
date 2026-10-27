@@ -21,6 +21,11 @@ provenance:
       at: 2026-10-26T04:18:38Z
       mode: "implement"
       note: "Implement administration API and PostgreSQL proofs; retain released-dependency and performance acceptance gates."
+    - model: "gpt-6.1-sol"
+      harness: "codex-cli"
+      at: 2026-10-27T02:14:13Z
+      mode: "implement"
+      note: "Resume against released PGMQ 0.7.0.0; complete unflagged administration and performance acceptance tooling and evidence."
 ---
 
 
@@ -46,7 +51,7 @@ Completion also requires measured performance acceptance. Compare existing worke
 - [x] M3 — Implemented default-off row-locked delete/send transactions, verified on 2026-10-25 against temporary upstream sources. Real database tests cover saved/missing/null headers, null payloads, normal handler input after redrive, concurrent calls, response-discard retry, rollback/recovery, cancellation, source authorization and distinct real topic fan-out copies. The final local-source suite passed 203 examples with zero failures, including 20 administration scenarios; the default released-dependency suite passed 183 examples. The released-dependency limitation remains open.
 - [ ] M4 — Pass the numeric performance gates with retained baseline/candidate evidence, complete operator documentation and durable records, and pass the final released-dependency build and test checks.
 
-Implementation, 2026-10-25: Hackage and upstream release tags were rechecked; both still end at `pgmq-hasql 0.6.1.1`, whose published module list has no inspection API. The local upstream integration source is commit `fe2804f87115c8b5bcd20dfe29596e0f3f996674`. The fixed baseline source is exported to `.dev/dlq-performance/baseline-source`. Before production feature edits, its original-dependency `ack-one` sample recorded 245,678 committed observations in 60.040458s after 10s warmup; see `docs/performance/9-dlq-browse-and-redrive.md`. This is initial evidence, not the paired matrix or a passing performance gate. Released-dependency acceptance remains open; a temporary local proof cannot close M1 or M4.
+Resume, 2026-10-26: verified Hackage publishes `pgmq-hasql 0.7.0.0` with `Pgmq.Hasql.Statements.Inspection`; upstream tag `v0.7.0.0` resolves to commit `88afb93802f790c1ecfbd3ed8bcce196c4430d13`. Commit `e5f26b7` adopts the released family and records all components building and 203 tests passing with administration enabled. The dependency-release prerequisite is satisfied. Remove the transitional flag and repeat final acceptance on the current candidate, including the committed `shibuya-core 0.12.0.0` compatibility update. M1 remains open for complete reproducible performance controls; M4 remains open for the full performance gates and final checks. The preserved pre-feature commit remains `e06e64b268055aca4eff78caabd1b0eb73aa1cd1`.
 
 ## Surprises & Discoveries
 
@@ -74,12 +79,11 @@ Implementation, 2026-10-25: Hackage and upstream release tags were rechecked; bo
 
 ## Outcomes & Retrospective
 
-Implementation checkpoint, 2026-10-25: M2/M3 are locally proved; this plan is **not complete**. The normal released-dependency build and 183-example suite pass with administration excluded by the transitional flag. The temporary upstream source-set build passes 203 examples, including 20 administration scenarios and the compiled public embedding example. Haddock builds pass for both configurations. Capability, improvement-request and strict friction-log validation pass. `mori validate` exits zero with the pre-existing schema-hash warning (`d29ca032...` recorded versus `dcb19e23...` embedded); no schema migration was attempted.
+Resume checkpoint, 2026-10-26: the released PGMQ 0.7.0.0 dependency is adopted, and the temporary `dlq-admin` flag has been removed from the library and tests. The normal unflagged PostgreSQL suite passes 203 examples with zero failures, including all 20 administration scenarios and the public embedding example. Haddock and strict bundle validations pass. A fresh `dist-dlq-release` build compiles all components; a reused build directory retained incompatible dependency identities (FRIC-2 in `docs/friction-log/`). The separate `shibuya-core 0.12.0.0` dependency update is now committed as `6241ed8` and is included in the final candidate.
 
-FRIC-1 remains `logged`: release-based acceptance cannot be triaged as resolved while upstream inspection is unreleased. No external release or issue was published. The durable administration decisions are distilled in [ADR 0002](../adr/0002-managed-dlq-administration.md).
+FRIC-1 is resolved by the published inspection release. The durable administration decisions remain in [ADR 0002](../adr/0002-managed-dlq-administration.md). The complete acceptance orchestrator now exists at `scripts/check-dlq-performance.py`, with common baseline-compatible worker instrumentation and candidate-only administration/encoding/read/retention measurements. Six tests protect statistical ratio direction, incomplete evidence rejection, request failures and index-plan checks. Short smoke experiments are tooling diagnostics and always exit nonzero; they do not close any numeric gate.
 
-Remaining M1/M4 work is the actual released inspection bound and unflagged build, complete original/matched/candidate paired performance orchestration and measurements, and final IR-3 acceptance. The worker-control capture tool passed an end-to-end original-source `ack-one` run (293,551 observations; environment and full artifacts in `.dev/dlq-worker-capture-check/`). The final serialization diagnostic passed 60 cases and exact 26-byte source-field growth assertions. These support remaining work but do not replace any numeric gate. The detailed evidence report is `docs/performance/9-dlq-browse-and-redrive.md`. Do not change IR-3's status or declare performance acceptance from the local proof.
-
+This plan remains incomplete until the original/matched/candidate experiment passes every numeric gate. Preserve the fixed baseline and all failed/inconclusive runs. Final results, exact reproduction and retained artifact locations belong in `docs/performance/9-dlq-browse-and-redrive.md`. IR-3 remains proposed until complete acceptance; no external release or tag has been published by this plan.
 
 ## Context and Orientation
 
@@ -98,7 +102,7 @@ The adapter is a library, currently version `0.17.0.0` in `shibuya-pgmq-adapter/
 
 Upstream discovery used Mori. `mori://shinzui/pgmq-hs/packages/pgmq-hasql` owns `Pgmq.Hasql.Sessions.peekMessages`, `lookupMessage`, their argument records, and `Pgmq.Hasql.Statements.Inspection`. Its `PeekMessages` has `unvalidatedQueueName :: Text`, `afterMessageId :: Maybe MessageId`, and `limit :: Int32`; `LookupMessage` has the name and message ID. The statement layer exposes `formatTableName`, `quoteIdentifier`, `peekStatement`, and `lookupStatement` for composing transactions. Resolve physical names on the server and quote identifiers using these helpers. Never interpolate input text into SQL. The upstream guide is `mori://shinzui/pgmq-hs/docs/queue-inspection`; detailed source/design references are project `mori://shinzui/pgmq-hs`, paths `pgmq-hasql/src/Pgmq/Hasql/Statements/Inspection.hs` and `docs/design/019-non-destructive-inspection-reads.md` (artifact-level URIs pending).
 
-On 2026-10-25, the [Hackage version registry](https://hackage.haskell.org/package/pgmq-hasql.json) and [upstream tags](https://github.com/shinzui/pgmq-hs/tags) both identify `0.6.1.1` as the latest release. Its published Cabal file does not expose the inspection module. The local upstream checkout at commit `5cb33cfd600766f1fb6f1856c78c9a5c92d12ce7` places inspection under Unreleased. The upstream implementation plan is `mori://shinzui/pgmq-hs/plans/27-add-non-destructive-peek-archive-and-lookup-reads-across-the-pgmq-layers`; current `mori path` resolution fails, so locate its project through the registry rather than replacing the reference with a bare external path. Do not assume `pgmq-hasql ^>=0.6` guarantees these functions, or invent a future release number.
+The [Hackage version registry](https://hackage.haskell.org/package/pgmq-hasql.json), [published Cabal file](https://hackage.haskell.org/package/pgmq-hasql-0.7.0.0/pgmq-hasql.cabal), and upstream `v0.7.0.0` tag were rechecked on 2026-10-26. The released 0.7.0.0 family contains inspection and is already required in library/test bounds. Use the normal released-dependency project; no upstream source override is needed. The upstream implementation plan remains `mori://shinzui/pgmq-hs/plans/27-add-non-destructive-peek-archive-and-lookup-reads-across-the-pgmq-layers`.
 
 The originating initiative's ownership decision, `mori://shinzui/keiro-ui/okf/adrs/concepts/ADR-1`, puts queue mechanics in the queue library and DLQ meaning in the adapter. Its packaging decision, `mori://shinzui/keiro-ui/okf/adrs/concepts/ADR-4`, keeps HTTP/WebSocket dependencies in optional sister packages. Its control-plane decision, `mori://shinzui/keiro-ui/okf/adrs/concepts/ADR-7`, requires mutation gates in the owning backend. These records were read after registry discovery, and their canonical handles resolve with `mori path`. No transport work is needed to satisfy them here.
 
@@ -171,46 +175,7 @@ curl -fsSL https://hackage.haskell.org/package/pgmq-hasql.json
 git ls-remote --tags https://github.com/shinzui/pgmq-hs.git
 ```
 
-Resolve the returned local project path and inspect its package exports and sources, then verify the selected release's published Cabal file and tag contain the same API. Expected current result is latest release `0.6.1.1` without inspection. Once a suitable release exists, record its exact version here and set the actual minimum bound; no guessed future version is prescribed.
-
-For an early proof before release, create a temporary Cabal project outside the tracked tree that lists the three local packages plus the required upstream family packages at paths discovered by Mori. Copy the existing `cabal.project` solver allowances into that temporary project and record the upstream commit. Run the same commands below with `--project-file` pointing to it. This proof may inform implementation but cannot close M1 or M4 until the released build passes. Do not overwrite a user's `cabal.project.local`.
-
-At this implementation checkpoint, the administration API/spec are behind the transitional `dlq-admin` flag. To reproduce the permitted local-source proof in a fresh checkout, run the following Python from this repository root (Mori resolves the canonical upstream project; no tracked project file is overwritten):
-
-```python
-from pathlib import Path
-import subprocess
-import tempfile
-
-root = Path.cwd()
-upstream = Path(subprocess.check_output(
-    ["mori", "path", "mori://shinzui/pgmq-hs"], text=True).strip())
-project_dir = Path(tempfile.mkdtemp(prefix="shibuya-dlq-plan9-"))
-packages = [root / name for name in (
-    "shibuya-pgmq-adapter", "shibuya-pgmq-adapter-bench", "shibuya-pgmq-example")]
-packages += [upstream / name for name in (
-    "pgmq-core", "pgmq-hasql", "pgmq-effectful", "pgmq-migration")]
-allowances = (root / "cabal.project").read_text().split("allow-newer:", 1)[1].strip()
-project = project_dir / "cabal.project"
-project.write_text("packages:\n" + "".join(f"  {path}\n" for path in packages)
-    + "\nallow-newer:\n  " + allowances
-    + ",\n  *:pgmq-core,\n  *:pgmq-hasql,\n  *:pgmq-effectful,\n  *:pgmq-migration\n"
-    + "\npackage shibuya-pgmq-adapter\n  flags: +dlq-admin\n")
-(root / ".dev").mkdir(exist_ok=True)
-(root / ".dev/dlq-integration-project").write_text(str(project))
-print(project)
-```
-
-Then run the focused or full suite using that temporary project:
-
-```bash
-nix develop --no-write-lock-file -c cabal test shibuya-pgmq-adapter-test \
-  --project-file="$(cat .dev/dlq-integration-project)" \
-  --builddir=dist-dlq-integration --enable-tests --test-show-details=direct \
-  --test-options='--match "Dead-letter administration"'
-```
-
-The current focused suite executes 20 examples with zero failures. Omitting `--test-options` executes 203 examples. These are temporary integration proofs, not released-dependency acceptance. Remove the temporary flag and set the actual released minimum before using the unflagged acceptance commands below.
+The current released minimum is `0.7.0.0`, including inspection. Use the repository's normal `cabal.project` with no local upstream override. The former temporary-source reproduction is retired. After removing the transitional flag, the focused suite below must execute the administration examples; selecting zero examples is not evidence.
 
 After adding the public API/spec registration, run the focused tests with the spec's top-level description set to `Dead-letter administration`:
 
@@ -220,7 +185,7 @@ nix develop --no-write-lock-file -c cabal test shibuya-pgmq-adapter-test --enabl
 
 Expected output names actual executed examples for producer-to-browse, non-destructive pagination/fetch, and redrive as they are implemented, finishing with zero failures. A run selecting zero tests is not evidence. PostgreSQL executables must be available; the Nix shell supplies them. The tests install PGMQ in their ephemeral databases and need no production connection, running application, or external service started by `just process-up`.
 
-Implement the performance runner and script described in M4 before running the following commands; the script does not exist at plan-update time. Its `--baseline-ref` selects the preserved pre-feature source, and its default matrix includes all performance cases below, with the original and matched dependency controls. `--output` is an untracked artifact directory, not a database connection. The script must fail on omitted cases or missing baseline evidence, run children using argument arrays, and stop its own temporary database processes on exit:
+Complete the performance runner and acceptance script described in M4 before running the following commands; only the original-worker capture script exists at this resume checkpoint. Its `--baseline-ref` selects the preserved pre-feature source, and its default matrix includes all performance cases below, with the original and matched dependency controls. `--output` is an untracked artifact directory, not a database connection. The script must fail on omitted cases or missing baseline evidence, run children using argument arrays, and stop its own temporary database processes on exit:
 
 ```bash
 nix develop --no-write-lock-file -c cabal bench shibuya-pgmq-adapter-bench:bench:dlq-payload-bench
@@ -232,15 +197,15 @@ Expected final script output is `DLQ-PERFORMANCE: PASS` only after every require
 At the final coherent boundary run:
 
 ```bash
-nix develop --no-write-lock-file -c cabal build all --enable-tests
-nix develop --no-write-lock-file -c cabal test shibuya-pgmq-adapter-test --enable-tests --test-show-details=direct
-nix develop --no-write-lock-file -c cabal haddock shibuya-pgmq-adapter
+nix develop --no-write-lock-file -c cabal build all --enable-tests --builddir=dist-dlq-release
+nix develop --no-write-lock-file -c cabal test shibuya-pgmq-adapter-test --enable-tests --builddir=dist-dlq-release --test-show-details=direct
+nix develop --no-write-lock-file -c cabal haddock shibuya-pgmq-adapter --builddir=dist-dlq-release
 okf validate docs/capabilities --profile docs/capabilities/profile.dhall --profile-enforce --log-enforce
 okf validate docs/improvement-requests --profile docs/improvement-requests/profile.dhall --profile-enforce --log-enforce
 git diff --check
 ```
 
-Build, full tests, documentation build, performance gates, changed-bundle validation, and whitespace checks must pass. Run the repository formatter on changed Haskell/Cabal files as configured in `nix/treefmt.nix`; avoid unrelated formatting churn. If `mori validate` from `just check-capabilities` has an unrelated pre-existing failure, record its exact diagnostic separately rather than silently claiming that aggregate check passed or expanding scope to registry migration.
+Build, full tests, documentation build, performance gates, changed-bundle validation, and whitespace checks must pass. The dedicated build directory avoids stale incremental artifacts after the dependency/optimization transition; it changes no dependency overrides or acceptance. Run the repository formatter on changed Haskell/Cabal files as configured in `nix/treefmt.nix`; avoid unrelated formatting churn. If `mori validate` from `just check-capabilities` has an unrelated pre-existing failure, record its exact diagnostic separately rather than silently claiming that aggregate check passed or expanding scope to registry migration.
 
 Commits during implementation stay on the current branch, use Conventional Commits, and carry both trailers:
 
@@ -321,6 +286,8 @@ data RedriveOutcome
 
 `DeadLetterEntry` exposes original JSON payload, textual reason code, JSON reason detail, reason representation (structured or legacy), resolved source and resolution basis (payload, configured fallback, or unavailable), optional original ID/count/timestamps/headers, and current DLQ ID/count/timestamps. Keep missing versus null original headers internally distinguishable for redrive. `DlqError` distinguishes disabled mutation, unknown managed DLQ, invalid page request, entry not found, malformed envelope, unresolved/disallowed source, and `PgmqRuntimeError`. `DlqConfigError` distinguishes invalid registrations and deadlines. Do not flatten all failures into text or expose an arbitrary destination argument on redrive.
 
-Use existing Aeson, Hasql, Hasql pool/transaction, PGMQ core/hasql/effectful runtime-error mapping, text, time, and vector dependencies. Do not add `pgmq-inspect` or any web/server dependency. The upstream read requirement is `mori://shinzui/pgmq-hs/okf/improvement-requests/concepts/IR-1`; its implementation exists locally but its released API is still the prerequisite recorded in M1. This is a standalone plan, not a child MasterPlan. The intention in frontmatter is authoritative for future implementation sessions.
+Use existing Aeson, Hasql, Hasql pool/transaction, PGMQ core/hasql/effectful runtime-error mapping, text, time, and vector dependencies. Do not add `pgmq-inspect` or any web/server dependency. The upstream read requirement is `mori://shinzui/pgmq-hs/okf/improvement-requests/concepts/IR-1`; its inspection API is available in the released 0.7.0.0 dependency family. This is a standalone plan, not a child MasterPlan. The intention in frontmatter is authoritative for future implementation sessions.
 
 Revision note, 2026-10-25: added required baseline capture, numeric performance budgets, shared-database load and large-queue comparisons, memory/encoding checks, reproducible runner commands, and retained evidence after the user requested performance-regression protection. Updated M1/M4 and removed the previous exclusion of benchmark thresholds. No performance measurements have been run by this planning revision.
+
+Revision note, 2026-10-26: refreshed dependency discovery after the 0.7.0.0 release and adoption; resume unflagged acceptance and the original numeric performance gates without temporary dependency overrides. Historical checkpoints above describe their original evidence, not current release availability.

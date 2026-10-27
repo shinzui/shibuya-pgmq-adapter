@@ -240,6 +240,36 @@ accepts a production database connection.
 
 This captures worker controls only. The complete released candidate/control,
 operator-load, large-queue, encoding-allocation and retained-heap acceptance
-orchestrator remains open. See the [plan 9 evidence report](../docs/performance/9-dlq-browse-and-redrive.md)
+orchestrator is documented below. See the [plan 9 evidence report](../docs/performance/9-dlq-browse-and-redrive.md)
 for actual measurements and outstanding gates. No performance PASS is inferred
 from correctness tests, serialization diagnostics or these initial controls.
+
+
+### Complete DLQ administration acceptance
+
+Run the full experiment sequentially on an otherwise idle machine:
+
+```bash
+nix develop --no-write-lock-file -c python3 scripts/check-dlq-performance.py \
+  --baseline-ref e06e64b268055aca4eff78caabd1b0eb73aa1cd1 \
+  --pairs 7 --warmup-seconds 10 --sample-seconds 60 \
+  --output .dev/dlq-release-performance
+```
+
+The script preserves immutable original, matched-dependency and current-source
+snapshots, instrumentation/compatibility patches, dependency plans, hardware and
+runtime settings, raw samples, actual query plans and `result.json`. Each run
+uses its own disposable database and separate four-connection worker and
+two-connection administration pools. It never accepts an application connection.
+The complete matrix takes several hours. Keep the machine idle throughout.
+
+`DLQ-PERFORMANCE: PASS` requires all plan 9 numeric gates. Missing evidence,
+worker failure, queue depletion, an omitted comparison or an inconclusive bound
+exits nonzero. Output directories cannot be reused. Preserve every failed run;
+fix an identified cause before repeating affected comparisons.
+
+For an orchestration diagnostic, use `--smoke --pairs 1 --warmup-seconds 0
+--sample-seconds 1 --seed-count 20000` with a fresh output directory. Smoke mode
+always reports `INCONCLUSIVE` and exits nonzero; it cannot certify acceptance.
+The gate logic is checked with `python3 -m unittest discover -s scripts -p
+test_dlq_performance.py`. No partitioned-queue performance budget is asserted.

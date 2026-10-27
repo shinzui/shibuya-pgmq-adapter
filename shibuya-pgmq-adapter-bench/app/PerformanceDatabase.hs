@@ -1,5 +1,5 @@
 -- | Disposable benchmark database. Setup and schema installation are untimed.
-module PerformanceDatabase (withPgmqDb, runPgmqSession) where
+module PerformanceDatabase (withPgmqDb, withPgmqPools, runPgmqSession) where
 
 import Control.Exception (bracket)
 import Data.List.NonEmpty (NonEmpty ((:|)))
@@ -17,17 +17,15 @@ import System.Directory qualified as EphemeralDirectory
 import System.Posix.User qualified as EphemeralUser
 
 withPgmqDb :: (Pool.Pool -> IO a) -> IO (Either StartError a)
-withPgmqDb action = withEphemeralPg $ \db -> do
+withPgmqDb action = withPgmqPools (\pool _ -> action pool)
+
+-- | Separate four-connection worker and two-connection administration pools.
+withPgmqPools :: (Pool.Pool -> Pool.Pool -> IO a) -> IO (Either StartError a)
+withPgmqPools action = withEphemeralPg $ \db -> do
   let connSettings = Pg.connectionSettings db
-
-  -- Install pgmq schema
   installPgmqSchema connSettings
-
-  -- Create and use connection pool
-  bracket
-    (createPool connSettings)
-    Pool.release
-    action
+  bracket (createPool 4 connSettings) Pool.release $ \workers ->
+    bracket (createPool 2 connSettings) Pool.release (action workers)
 
 runPgmqSession :: Pool.Pool -> Session a -> IO a
 runPgmqSession pool session = do
@@ -54,11 +52,11 @@ installPgmqSchema connSettings = do
     Right _report -> pure ()
 
 -- | Create a connection pool from connection settings.
-createPool :: Settings.Settings -> IO Pool.Pool
-createPool connSettings = do
+createPool :: Int -> Settings.Settings -> IO Pool.Pool
+createPool size connSettings = do
   let poolConfig =
         PoolConfig.settings
-          [ PoolConfig.size 4,
+          [ PoolConfig.size size,
             PoolConfig.acquisitionTimeout (secondsToDiffTime 10),
             PoolConfig.agingTimeout (secondsToDiffTime 3600),
             PoolConfig.idlenessTimeout (secondsToDiffTime 60),

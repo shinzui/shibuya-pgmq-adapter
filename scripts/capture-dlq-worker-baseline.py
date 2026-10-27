@@ -21,7 +21,7 @@ SCENARIOS = (
     "dlq-direct-small", "dlq-topic-meta", "dlq-topic-small",
 )
 BENCH = "shibuya-pgmq-adapter-bench"
-INSTRUMENTATION = (f"{BENCH}/app/DlqPerformance.hs", f"{BENCH}/app/PerformanceDatabase.hs")
+INSTRUMENTATION = (f"{BENCH}/app/DlqPerformance.hs", f"{BENCH}/app/PerformanceDatabase.hs", f"{BENCH}/app/WorkerPerformance.hs")
 
 
 def query(args, cwd):
@@ -73,7 +73,8 @@ def main():
         source.extractall(snapshot, filter="data")
     cabal_path = f"{BENCH}/{BENCH}.cabal"
     original_cabal = (snapshot / cabal_path).read_text()
-    component = (root / cabal_path).read_text().split("executable dlq-performance\n", 1)[1]
+    component = (root / cabal_path).read_text().split("executable dlq-performance\n", 1)[1].split("\nexecutable ", 1)[0]
+    component = component.replace("^>=0.7.0.0", "^>=0.6.1.1").replace("shibuya-core ^>=0.12.0.0", "shibuya-core ^>=0.11.0.0")
     instrumented_cabal = original_cabal + "\nexecutable dlq-performance\n" + component
     (snapshot / cabal_path).write_text(instrumented_cabal)
     patch = list(difflib.unified_diff(original_cabal.splitlines(True), instrumented_cabal.splitlines(True),

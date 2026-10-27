@@ -11,10 +11,10 @@
   and benchmarks. Inspection statements are now available from Hackage.
 - Add `original_queue` to adapter-produced DLQ envelopes in both metadata modes,
   using the new `mkDlqPayloadForQueue`; preserve `mkDlqPayload` and reason fields.
-- Add a preview in-process `Shibuya.Adapter.Pgmq.DeadLetter` API for registered,
-  non-destructive browse/fetch and default-disabled transactional redrive. The
-  manual `dlq-admin` Cabal flag keeps this API opt-in pending plan 9 acceptance;
-  numeric performance acceptance remains open.
+- Add an in-process `Shibuya.Adapter.Pgmq.DeadLetter` API for registered,
+  non-destructive browse/fetch and default-disabled transactional redrive in the
+  normal build; the temporary `dlq-admin` flag is removed. Numeric performance
+  acceptance is tracked in plan 9.
 
 ## 0.17.0.0 — 2026-10-25
 

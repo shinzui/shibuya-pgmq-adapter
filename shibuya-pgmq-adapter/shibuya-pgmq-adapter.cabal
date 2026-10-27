@@ -17,25 +17,18 @@ extra-doc-files: CHANGELOG.md
 common warnings
   ghc-options: -Wall
 
--- Keep the experimental administration API opt-in pending acceptance.
-flag dlq-admin
-  description: Build the experimental DLQ administration API
-  default: False
-  manual: True
-
 library
   import: warnings
   exposed-modules:
     Shibuya.Adapter.Pgmq
     Shibuya.Adapter.Pgmq.Config
     Shibuya.Adapter.Pgmq.Convert
+    Shibuya.Adapter.Pgmq.DeadLetter
 
   other-modules:
+    Shibuya.Adapter.Pgmq.DeadLetter.Internal
     Shibuya.Adapter.Pgmq.Internal
 
-  if flag(dlq-admin)
-    exposed-modules: Shibuya.Adapter.Pgmq.DeadLetter
-    other-modules: Shibuya.Adapter.Pgmq.DeadLetter.Internal
   default-extensions:
     DeriveAnyClass
     DerivingStrategies
@@ -84,14 +77,12 @@ test-suite shibuya-pgmq-adapter-test
     src
 
   main-is: Main.hs
+  other-modules:
+    DeadLetterExample
+    Shibuya.Adapter.Pgmq.DeadLetter
+    Shibuya.Adapter.Pgmq.DeadLetter.Internal
+    Shibuya.Adapter.Pgmq.DeadLetterSpec
 
-  if flag(dlq-admin)
-    cpp-options: -DDLQ_ADMIN
-    other-modules:
-      DeadLetterExample
-      Shibuya.Adapter.Pgmq.DeadLetter
-      Shibuya.Adapter.Pgmq.DeadLetter.Internal
-      Shibuya.Adapter.Pgmq.DeadLetterSpec
   default-extensions:
     DeriveAnyClass
     DerivingStrategies
