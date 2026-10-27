@@ -6,7 +6,7 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async, cancel, poll)
 import Control.Exception (throwIO)
 import Control.Monad (forM, forM_, replicateM_, unless, void)
-import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson (Value, object, (.=))
 import Data.IORef
 import Data.List (sort)
 import Data.Text qualified as Text
@@ -29,7 +29,7 @@ import Shibuya.Adapter.Pgmq
 import Shibuya.Core.Ack (AckDecision (..), DeadLetterReason (..))
 import Shibuya.Core.AckHandle (AckHandle (..))
 import Shibuya.Core.Ingested (Ingested (..))
-import Shibuya.Core.Types (Envelope (..))
+import Shibuya.Core.Types (Cursor (..), Envelope (..))
 import Shibuya.Telemetry.Effect (runTracingNoop)
 import Streamly.Data.Fold qualified as Fold
 import Streamly.Data.Stream qualified as Stream
@@ -106,7 +106,7 @@ runWorker scenario warmup sample seeds prepare = do
                 end <- liftIO getMonotonicTimeNSec
                 liftIO $ do
                   active <- readIORef measuring
-                  if active && message.envelope.payload /= String "background" then atomicModifyIORef' observations (\xs -> (fromIntegral (end - start) / 1e6 : xs, ())) else pure ()
+                  if active && (case message.envelope.cursor of Just (CursorInt n) -> n <= fromIntegral seeds; _ -> error "worker fixture requires an original source message ID") then atomicModifyIORef' observations (\xs -> (fromIntegral (end - start) / 1e6 : xs, ())) else pure ()
             )
             adapter.source
       either throwIO pure outcome

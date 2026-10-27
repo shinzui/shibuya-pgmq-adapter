@@ -183,3 +183,12 @@ Short smoke runs use fresh `.dev/dlq-smoke-20261026*` directories. Initial faile
 smokes exposed control-constraint and near-tail fixture mistakes in the new
 tooling; their logs remain available. Smoke mode always reports INCONCLUSIVE,
 including when every diagnostic executes successfully. It cannot produce PASS.
+
+
+The first full attempt, `.dev/dlq-release-25cb519/`, was interrupted after eight
+completed worker samples. Review found that the common instrumentation excluded
+background redrives by a fixture payload marker rather than the plan's explicit
+source-ID boundary. The corrected instrumentation uses the source message ID
+(`CursorInt`), counting only the originally seeded IDs. This changes common
+measurement code, so the initial samples remain diagnostic and are not reused
+for acceptance. The fixed pre-feature source commit is unchanged.
