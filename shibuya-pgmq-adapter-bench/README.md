@@ -291,15 +291,6 @@ instrumentation uses `clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)` rather than th
 host runtime's microsecond-quantized clock. Other platforms retain the GHC clock.
 
 
-For a fixed-count worker extension, use `--extend-worker-from <finished-output>
---worker-scenario <case> --worker-pairs <fixed-total>` with a new `--output`.
-Declare the total before collecting additional observations. The checker retains
-all previous pairs, verifies unchanged measured source/tool/hardware identities,
-reuses immutable binaries, and recomputes the selected case over the entire data
-set. It refuses a running parent to preserve sequential measurements and retains
-all unrelated gates and the superseded initial bounds in the combined result.
-
-
 The batch-size-one FIFO operator case defaults to a 100,000-row source fixture
 (`--case-seed-count fifo-load-one=100000`), while keeping its 100,000-row DLQ.
 Other worker source fixtures retain `--seed-count`. This avoids spending the
@@ -316,9 +307,7 @@ on both sides of every pair. The parent bundle remains unchanged and all other
 workload and acceptance requirements still apply.
 
 
-`--extend-encoding-from <finished-output> --encoding-pairs <fixed-total>` extends
-the entire encoding matrix, retaining every original pair and adding every case
-in every additional pair. The default total is 21. Extensions carry frozen
-metadata and a complete gate history, so a subsequent worker extension can use
-the encoding extension as its parent. Declare counts before collecting data;
-never stop early after a favorable intermediate bound.
+Use `--encoding-pairs 21` to choose a larger fixed encoding sample count before
+starting the full experiment. All cases still run; no selected-case extension or
+result-merging mode is maintained. The original extension commands used for the
+recorded investigation are historical and remain available at commit `6e99c40`.

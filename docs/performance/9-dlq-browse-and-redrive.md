@@ -22,6 +22,12 @@ source hashes are verified before evidence reuse. The final combined result must
 pass all 198 original numeric gates. Separate pools alone do not establish
 performance isolation. Partitioned queues are outside the validated matrix.
 
+The runner now supports a full experiment and exact-sample resumption. The
+one-off worker/encoding extension commands below describe historical evidence
+created with commit `6e99c40`; they are no longer current CLI options. To select
+21 encoding pairs upfront, pass `--encoding-pairs 21` to the full runner.
+Cleanup preserved every recorded result and all numeric limits.
+
 ## Retained complete result
 
 | Gate family | Passed / required |
@@ -436,3 +442,10 @@ all three changed OKF bundle profile/log validations pass. Final build/test/
 Haddock logs are `.dev/dlq-release-final-{build,test,haddock}.log`.
 These checks complete the implementation handoff; they do not waive the one
 remaining numeric performance gate.
+
+
+Maintenance cleanup removed the one-off sample-extension workflow while keeping
+the full matrix and exact-sample resumption. All 12 remaining checker tests pass.
+A replay in `.dev/dlq-cleanup-replay/` reused all 365 saved measurements and
+reproduced all 198 gate records exactly, with benchmark/build children forbidden.
+The recorded FIFO failure remains; no performance result changed.

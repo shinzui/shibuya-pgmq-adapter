@@ -440,3 +440,18 @@ request. The committed gate snapshot in
 `docs/performance/9-dlq-browse-and-redrive-gates.json` retains all paired ratios,
 confidence bounds, dependency versions and measured source hashes. Production
 Haskell/Cabal/Nix source is unchanged from measured candidate `d4dfba1`.
+
+
+Cleanup, 2026-10-27: at the user's request, remove the one-off worker/encoding
+extension workflow and its duplicated metadata/result-merging machinery. Keep
+the complete acceptance matrix, exact-sample resumption, failure preservation,
+benchmarks, raw evidence, DLQ implementation and correctness tests. Choose a
+larger encoding count upfront with `--encoding-pairs`; historical extension
+commands above refer to commit `6e99c40`. This is a maintenance simplification,
+not a performance fix or acceptance waiver. No production worker code changes.
+
+Cleanup validation: all 12 remaining checker tests pass. A resumption replay in
+`.dev/dlq-cleanup-replay/` reused all 365 saved measurements and reproduced every
+one of the 198 gate records exactly, including the unresolved FIFO failure.
+The replay forbade benchmark/build subprocesses, so it started no database or
+new measurement. Production source and recorded evidence remain unchanged.

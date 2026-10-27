@@ -94,31 +94,6 @@ def encoding_gates(encoding):
     return gates
 
 
-def copy_frozen_metadata(parent, output):
-    for kind in ("original", "matched", "candidate"):
-        (output / (kind + "-source")).symlink_to((parent / (kind + "-source")).resolve(), target_is_directory=True)
-        shutil.copy2(parent / (kind + "-dependencies.json"), output / (kind + "-dependencies.json"))
-    for filename in ("candidate-sha256.json", "original-instrumentation.patch", "matched-compatibility.patch", "candidate-working.patch"):
-        shutil.copy2(parent / filename, output / filename)
-
-
-def publish_extension(experiment, previous, parent, replacements, details):
-    names = {gate["name"] for gate in replacements}
-    superseded = [gate for gate in previous["gates"] if gate["name"] in names]
-    if len(superseded) != len(replacements):
-        raise ValueError("parent comparison gates are incomplete")
-    combined = [gate for gate in previous["gates"] if gate["name"] not in names] + replacements
-    status = "PASS" if len(combined) >= 198 and all(gate["status"] == "PASS" for gate in combined) else "FAIL"
-    write_json(experiment.output / "result.json", {"status": status, "bootstrapSeed": SEED, "bootstrapResamples": 10000,
-        "parentExperiment": str(parent), "parentResultSha256": hashlib.sha256((parent / "result.json").read_bytes()).hexdigest(),
-        "extensionChain": previous.get("extensionChain", []) + [details],
-        "supersededGates": previous.get("supersededGates", []) + superseded, "gates": combined,
-        "runs": [{**run, "artifact": str(parent / run["artifact"])} for run in previous["runs"]]
-                + [{**run, "artifact": str(experiment.output / run["artifact"])} for run in experiment.runs]})
-    print("DLQ-PERFORMANCE: " + status, flush=True)
-    return 0 if status == "PASS" else 1
-
-
 def snapshot(output, name, ref=None):
     dest = output / (name + "-source")
     dest.mkdir()
@@ -282,148 +257,6 @@ def verify_frozen_parent(parent, baseline):
     return previous, environment
 
 
-def protect_extension(args, action):
-    output = args.output.resolve()
-    if output.exists():
-        raise ValueError("refusing an existing extension output directory")
-    try:
-        return action(args)
-    except BaseException as error:
-        if output.is_dir():
-            result_path = output / "result.json"
-            result = json.loads(result_path.read_text()) if result_path.exists() else {"runs": [], "gates": []}
-            result["status"] = "INCONCLUSIVE"
-            write_json(result_path, result)
-            (output / "error.txt").write_text(repr(error) + "\n")
-        raise
-
-
-def extend_worker(args):
-    return protect_extension(args, _extend_worker)
-
-
-def extend_encoding(args):
-    return protect_extension(args, _extend_encoding)
-
-
-def _extend_encoding(args):
-    parent = args.extend_encoding_from.resolve()
-    baseline = capture.query(["git", "rev-parse", args.baseline_ref + "^{commit}"], ROOT)
-    previous, environment = verify_frozen_parent(parent, baseline)
-    if args.smoke:
-        raise ValueError("encoding extension cannot use smoke mode")
-    for setting in ("warmup_seconds", "sample_seconds"):
-        if getattr(args, setting) != environment["arguments"][setting]:
-            raise ValueError("encoding duration differs from parent")
-    data = {"current": [], "aware": []}
-    for run in previous["runs"]:
-        arguments = run["arguments"]
-        if arguments[0] == "encoding":
-            data[arguments[1]].append(json.loads((parent / run["artifact"]).read_text())["cases"])
-    counts = {len(cases) for cases in data.values()}
-    if len(counts) != 1 or min(counts) < 7 or args.encoding_pairs <= max(counts):
-        raise ValueError("require complete encoding pairs and a larger fixed total")
-    original_count = counts.pop()
-    output = args.output.resolve()
-    if not output.is_relative_to(ROOT / ".dev"):
-        raise ValueError("extension output must be under .dev")
-    output.mkdir(parents=True, exist_ok=False)
-    experiment = Experiment(output)
-    details = {"kind": "encoding", "existingPairs": original_count, "fixedTotalPairs": args.encoding_pairs, "parent": str(parent)}
-    write_json(output / "environment.json", {**environment, "extension": details})
-    copy_frozen_metadata(parent, output)
-    binary = next(path for path in (parent / "candidate-source/dist-performance").rglob("dlq-admin-performance")
-                  if path.is_file() and os.access(path, os.X_OK))
-    for pair in range(original_count, args.encoding_pairs):
-        for mode in (["current", "aware"] if pair % 2 == 0 else ["aware", "current"]):
-            record = experiment.measure(str(binary), ["encoding", mode, args.warmup_seconds, args.sample_seconds],
-                                        f"encoding-{mode}-{pair + 1}")
-            data[mode].append(record["cases"])
-    return publish_extension(experiment, previous, parent, encoding_gates(data), details)
-
-
-def _extend_worker(args):
-    """One fixed extension, retaining every original pair and immutable binary.
-
-    It runs only after the parent experiment finishes, so the two workloads
-    cannot contaminate each other. It never replaces or edits parent evidence.
-    """
-    parent = args.extend_worker_from.resolve()
-    if not parent.is_relative_to(ROOT / ".dev"):
-        raise ValueError("parent experiment must be under this checkout's .dev")
-    result_path = parent / "result.json"
-    parent_bytes = result_path.read_bytes()
-    previous = json.loads(parent_bytes)
-    if previous["status"] == "RUNNING":
-        raise ValueError("wait for the complete parent experiment before extending")
-    if args.smoke or not args.worker_scenario:
-        raise ValueError("extension requires an explicit worker scenario and cannot use smoke mode")
-    environment = json.loads((parent / "environment.json").read_text())
-    baseline = capture.query(["git", "rev-parse", args.baseline_ref + "^{commit}"], ROOT)
-    if environment["baselineCommit"] != baseline:
-        raise ValueError("baseline identity differs from parent experiment")
-    for name, command in (("ghc", ["ghc", "--numeric-version"]), ("postgresql", ["postgres", "--version"]), ("cabal", ["cabal", "--version"])):
-        if capture.query(command, ROOT) != environment[name]:
-            raise ValueError(name + " differs from parent experiment")
-    for relative, digest in json.loads((parent / "candidate-sha256.json").read_text()).items():
-        path = ROOT / relative
-        if path.suffix in (".hs", ".cabal", ".nix") or path.name in ("cabal.project", "flake.lock"):
-            if not path.exists() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-                raise ValueError("measured source/constraints changed: " + relative)
-    if environment["machine"] != platform.machine() or environment["cpuCount"] != os.cpu_count():
-        raise ValueError("hardware differs from parent experiment")
-    if environment.get("hardware") and capture.query(["sysctl", "hw.model", "hw.memsize", "machdep.cpu.brand_string"], ROOT) != environment["hardware"]:
-        raise ValueError("hardware differs from parent experiment")
-    scenario = args.worker_scenario
-    data = {kind: [] for kind in ("original", "matched", "candidate")}
-    for run in previous["runs"]:
-        arguments = run["arguments"]
-        if arguments[0] == scenario or arguments[:2] == ["worker", scenario]:
-            for kind in data:
-                if "-" + kind + "-" in Path(run["artifact"]).name:
-                    record = json.loads((parent / run["artifact"]).read_text())
-                    data[kind].append(record)
-                    break
-    counts = {len(rows) for rows in data.values()}
-    if len(counts) != 1 or min(counts) < 7 or args.worker_pairs <= max(counts):
-        raise ValueError("require complete original pairs and a larger fixed total")
-    original_count = counts.pop()
-    parent_arguments = environment["arguments"]
-    for name in ("warmup_seconds", "sample_seconds", "seed_count"):
-        if getattr(args, name) != parent_arguments[name]:
-            raise ValueError("workload setting differs from parent: " + name)
-    output = args.output.resolve()
-    if not output.is_relative_to(ROOT / ".dev"):
-        raise ValueError("output must be under this checkout's .dev")
-    output.mkdir(parents=True, exist_ok=False)
-    experiment = Experiment(output)
-    write_json(output / "environment.json", {**environment,
-        "extension": {"parent": str(parent), "parentResultSha256": hashlib.sha256(parent_bytes).hexdigest(),
-                      "scenario": scenario, "existingPairs": original_count, "fixedTotalPairs": args.worker_pairs}})
-    copy_frozen_metadata(parent, output)
-    binaries = {}
-    for kind in data:
-        target = "dlq-admin-performance" if kind == "candidate" else "dlq-performance"
-        binaries[kind] = next(path for path in (parent / (kind + "-source") / "dist-performance").rglob(target)
-                              if path.is_file() and os.access(path, os.X_OK))
-    for pair in range(original_count, args.worker_pairs):
-        order = ["original", "matched", "candidate"]
-        if pair % 2:
-            order.reverse()
-        for kind in order:
-            arguments = [scenario, args.warmup_seconds, args.sample_seconds, args.seed_count]
-            if kind == "candidate":
-                arguments = ["worker", *arguments, "idle"]
-            data[kind].append(experiment.measure(str(binaries[kind]), arguments,
-                                               f"worker-{scenario}-{kind}-{pair + 1}"))
-    replacements = []
-    for kind in ("original", "matched"):
-        replacements += worker_gates(scenario + "/" + kind, data[kind], data["candidate"], scenario.startswith("dlq"))
-    return publish_extension(experiment, previous, parent, replacements,
-                             {"kind": "worker", "scenario": scenario, "existingPairs": original_count,
-                              "fixedTotalPairs": args.worker_pairs, "parent": str(parent)})
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-ref", required=True)
@@ -436,15 +269,11 @@ def main():
     parser.add_argument("--smoke", action="store_true", help="short diagnostic; always INCONCLUSIVE")
     parser.add_argument("--resume-from", type=Path, help="retain every matching measurement from a finished parent")
     parser.add_argument("--case-seed-count", dest="case_seed_counts", action="append", default=[], help="fixed source fixture SCENARIO=ROWS (default fifo-load-one=100000)")
-    parser.add_argument("--extend-encoding-from", type=Path, help="extend every encoding case, retaining all parent pairs")
-    parser.add_argument("--encoding-pairs", type=int, default=21, help="fixed total encoding pairs for one extension")
-    parser.add_argument("--extend-worker-from", type=Path, help="finished parent experiment; retain all of its pairs")
-    parser.add_argument("--worker-scenario", choices=SCENARIOS)
-    parser.add_argument("--worker-pairs", type=int, default=21, help="fixed total pairs for one extension; no early stopping")
+    parser.add_argument("--encoding-pairs", type=int, default=7, help="fixed encoding pair count, chosen before measurement")
     args = parser.parse_args()
-    if not args.smoke and (args.pairs < 7 or args.warmup_seconds < 10 or args.sample_seconds < 60):
+    if not args.smoke and (args.pairs < 7 or args.encoding_pairs < 7 or args.warmup_seconds < 10 or args.sample_seconds < 60):
         parser.error("acceptance requires >=7 pairs, >=10s warmup and >=60s samples")
-    if args.pairs < 1 or args.ack_one_pairs < 1 or args.warmup_seconds < 0 or args.sample_seconds < 1 or args.seed_count < 1000:
+    if args.pairs < 1 or args.ack_one_pairs < 1 or args.encoding_pairs < 1 or args.warmup_seconds < 0 or args.sample_seconds < 1 or args.seed_count < 1000:
         parser.error("invalid experiment size")
     overrides = {} if args.smoke else {"fifo-load-one": 100_000}
     for override in args.case_seed_counts:
@@ -453,16 +282,6 @@ def main():
             parser.error("invalid per-case source fixture: " + override)
         overrides[name] = int(value)
     args.case_seed_counts = overrides
-    if args.extend_encoding_from:
-        if args.resume_from or args.extend_worker_from:
-            parser.error("choose one resumption/extension mode")
-        return extend_encoding(args)
-    if args.extend_worker_from:
-        if args.resume_from:
-            parser.error("choose resume or extension")
-        return extend_worker(args)
-    if args.worker_scenario:
-        parser.error("--worker-scenario requires --extend-worker-from")
     output = args.output.resolve()
     if not output.is_relative_to(ROOT / ".dev"):
         parser.error("output must be under this checkout's .dev directory")
@@ -553,7 +372,7 @@ def main():
             if not args.smoke:
                 experiment.gates += worker_gates("operator-load/" + scenario, data["idle"], data["load"], loaded=True)
         encoding = {"current": [], "aware": []}
-        for pair in range(args.pairs):
+        for pair in range(args.pairs if args.smoke else max(args.pairs, args.encoding_pairs)):
             for mode in (["current", "aware"] if pair % 2 == 0 else ["aware", "current"]):
                 encoding[mode].append(experiment.measure(binaries["candidate"], ["encoding", mode, warm, sample], f"encoding-{mode}-{pair + 1}")["cases"])
         if not args.smoke:

@@ -3,7 +3,6 @@ import importlib.util
 from pathlib import Path
 import sys
 import tempfile
-from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
 
@@ -63,26 +62,14 @@ class PerformanceAcceptance(unittest.TestCase):
         excessive = [dict(case, nsPerOp=1501, allocatedPerOp=3173) for case in old]
         self.assertTrue(all(gate["status"] == "FAIL" for gate in performance.encoding_gates({"current": [old]*7, "aware": [excessive]*7})))
 
-    def test_extension_never_overwrites_previous_evidence(self):
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory)
-            result = output / "result.json"
-            result.write_text('{"status":"PASS"}')
-            with self.assertRaises(ValueError):
-                performance.extend_worker(SimpleNamespace(output=output))
-            self.assertEqual(result.read_text(), '{"status":"PASS"}')
-            self.assertFalse((output / "error.txt").exists())
-
-    def test_extension_cannot_overlap_the_parent_experiment(self):
+    def test_resume_rejects_a_running_parent(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             parent = root / ".dev/parent"
             parent.mkdir(parents=True)
             (parent / "result.json").write_text('{"status":"RUNNING"}')
-            output = root / ".dev/extension"
             with patch.object(performance, "ROOT", root), self.assertRaises(ValueError):
-                performance.extend_worker(SimpleNamespace(output=output, extend_worker_from=parent))
-            self.assertFalse(output.exists())
+                performance.verify_frozen_parent(parent, "unused")
 
     def test_resume_retains_matching_invalid_evidence_without_rerunning(self):
         with tempfile.TemporaryDirectory() as directory:
