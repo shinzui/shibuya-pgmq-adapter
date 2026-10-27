@@ -55,6 +55,12 @@ def gate(name, ratios, limit):
 def worker_gates(name, controls, candidates, dlq=False, loaded=False):
     if len(controls) != len(candidates) or not all(r.get("valid") for r in controls + candidates):
         raise ValueError(f"{name}: invalid or missing worker observations")
+    for run in controls + candidates:
+        tables = run.get("maintenance", {}).get("tables", [])
+        if not tables or any(table["autoVacuumCount"] or table["autoAnalyzeCount"]
+                             or table["manualVacuumCount"] < 1 or table["manualAnalyzeCount"] < 1
+                             or "autovacuum_enabled=false" not in table["options"] for table in tables):
+            raise ValueError(f"{name}: uncontrolled fixture maintenance invalidates measurement")
     gates = [gate(name + "/throughput", [b["throughput"] / c["throughput"] for b,c in zip(controls,candidates)], 1 / 0.95),
              gate(name + "/p95", [c["p95Ms"] / b["p95Ms"] for b,c in zip(controls,candidates)], 1.10)]
     if not loaded:

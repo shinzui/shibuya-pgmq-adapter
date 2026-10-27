@@ -1,18 +1,24 @@
 -- | Disposable benchmark database. Setup and schema installation are untimed.
-module PerformanceDatabase (withPgmqDb, withPgmqPools, runPgmqSession) where
+module PerformanceDatabase (withPgmqDb, withPgmqPools, configureBenchmarkQueue, stabilizeBenchmarkQueues, runPgmqSession) where
 
 import Control.Exception (bracket)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Monoid qualified as EphemeralMonoid
+import Data.Text qualified as Text
 import Data.Time (secondsToDiffTime)
 import Database.PostgreSQL.Migrate qualified as Migrate
 import EphemeralPg (StartError)
 import EphemeralPg qualified as Pg
 import Hasql.Connection.Settings qualified as Settings
+import Hasql.Decoders qualified as D
+import Hasql.Encoders qualified as E
 import Hasql.Pool qualified as Pool
 import Hasql.Pool.Config qualified as PoolConfig
 import Hasql.Session (Session)
+import Hasql.Session qualified as Session
+import Hasql.Statement qualified as Statement
 import Pgmq.Migration qualified as Migration
+import Pgmq.Types qualified as Pgmq
 import System.Directory qualified as EphemeralDirectory
 import System.Posix.User qualified as EphemeralUser
 
@@ -73,3 +79,26 @@ withEphemeralPg action = do
   EphemeralDirectory.createDirectoryIfMissing True root
   let config = Pg.defaultConfig {Pg.temporaryRoot = EphemeralMonoid.Last (Just root)}
   Pg.withConfig config action
+
+-- | Fixture-only policy. Prevent a fresh cluster's automatic VACUUM/ANALYZE
+-- timer from firing at arbitrary points within different paired samples.
+-- These helpers are never used by production adapter code.
+configureBenchmarkQueue :: Pool.Pool -> Pgmq.QueueName -> IO ()
+configureBenchmarkQueue pool queue =
+  benchmarkSql pool $
+    "alter table " <> benchmarkTable queue <> " set (autovacuum_enabled = false, toast.autovacuum_enabled = false)"
+
+-- | Complete fixture maintenance outside timed work. CHECKPOINT also waits for
+-- any seed-triggered checkpoint; no setup writes are left to its background timer.
+stabilizeBenchmarkQueues :: Pool.Pool -> [Pgmq.QueueName] -> IO ()
+stabilizeBenchmarkQueues pool queues = do
+  mapM_ (\queue -> benchmarkSql pool ("vacuum (analyze) " <> benchmarkTable queue)) queues
+  benchmarkSql pool "checkpoint"
+
+benchmarkSql :: Pool.Pool -> Text.Text -> IO ()
+benchmarkSql pool statement =
+  runPgmqSession pool $
+    Session.statement () (Statement.unpreparable statement E.noParams D.noResult)
+
+benchmarkTable :: Pgmq.QueueName -> Text.Text
+benchmarkTable queue = "pgmq.\"q_" <> Text.replace "\"" "\"\"" (Pgmq.queueNameToText queue) <> "\""

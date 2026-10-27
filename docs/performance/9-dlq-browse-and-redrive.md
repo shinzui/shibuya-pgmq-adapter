@@ -167,7 +167,7 @@ leave M4 open; none may be relaxed without the user's scope decision.
 
 The unflagged PostgreSQL suite passes 203 examples, including 20 administration
 scenarios, with PGMQ 0.7.0.0 and Shibuya core 0.12.0.0. All components build in
-`dist-dlq-release` and Haddock succeeds. Six Python tests protect acceptance
+`dist-dlq-release` and Haddock succeeds. Seven Python tests protect acceptance
 ratios and fail-closed evidence checks. These are correctness/tooling evidence.
 The full measured acceptance result remains pending.
 
@@ -192,3 +192,35 @@ source-ID boundary. The corrected instrumentation uses the source message ID
 (`CursorInt`), counting only the originally seeded IDs. This changes common
 measurement code, so the initial samples remain diagnostic and are not reused
 for acceptance. The fixed pre-feature source commit is unchanged.
+
+
+## First complete case and fixture-maintenance investigation
+
+The ID-based attempt `.dev/dlq-release-id-counted/` completed all seven pairs for
+`ack-one`. Its upper cost bounds failed: original throughput 1.081977, matched
+throughput 1.085166 (budget 1.052632), and original p95 1.303030 (budget 1.10).
+All three allocation gates passed. Every sample is retained. These results do
+not establish acceptance, and the user reaffirmed retaining the original gates.
+
+The short `.dev/dlq-scheduler-diagnostic/` runs compare original/candidate binaries
+with one and four capabilities. All eight observed about 9,000 messages/second
+and 0.028ms p95 over ten seconds; scheduler capabilities did not explain the
+failure. These short runs cannot replace the required sixty-second samples.
+
+A subsequent read-only diagnostic of the owned disposable database found an
+active `VACUUM ANALYZE` during a measured worker interval, 1,308,804 estimated
+dead tuples, and two requested checkpoints with only one completed. The complete
+query output is `.dev/dlq-autovacuum-diagnostic.log`. Automatic maintenance timing
+was not controlled by merely excluding seeding from timed work. See PostgreSQL's
+[maintenance statistics](https://www.postgresql.org/docs/18/monitoring-stats.html#MONITORING-PG-STAT-ALL-TABLES-VIEW)
+and [CHECKPOINT semantics](https://www.postgresql.org/docs/18/sql-checkpoint.html).
+
+The corrected setup disables automatic vacuum/analyze **only on disposable
+benchmark queues**, manually vacuums/analyzes the seeded fixtures and completes a
+checkpoint before warmup. It applies unchanged to both worker controls and the
+candidate. Results retain table options and automatic/manual maintenance counts;
+uncontrolled preparation is inconclusive. This is a controlled database
+configuration, not a production maintenance recommendation or a production SLO.
+The budgets, workload sizes/rates, pools, durations and runtime capabilities are
+unchanged. All comparisons must restart after this common instrumentation change;
+no favorable subset of the earlier samples is reused.

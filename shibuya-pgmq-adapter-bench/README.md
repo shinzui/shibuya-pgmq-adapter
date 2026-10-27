@@ -273,3 +273,11 @@ For an orchestration diagnostic, use `--smoke --pairs 1 --warmup-seconds 0
 always reports `INCONCLUSIVE` and exits nonzero; it cannot certify acceptance.
 The gate logic is checked with `python3 -m unittest discover -s scripts -p
 test_dlq_performance.py`. No partitioned-queue performance budget is asserted.
+
+
+Benchmark queues have automatic vacuum/analyze disabled only for the lifetime
+of their disposable database. Fixture preparation performs manual vacuum/analyze
+and a checkpoint before warmup so seed-triggered maintenance does not overlap
+paired intervals unpredictably. Worker artifacts retain maintenance settings and
+counters, and the acceptance checker rejects missing or uncontrolled setup. This
+controlled configuration is not a production database maintenance recommendation.

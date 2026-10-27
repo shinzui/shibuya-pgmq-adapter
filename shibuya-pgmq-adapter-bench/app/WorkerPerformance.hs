@@ -19,7 +19,7 @@ import Hasql.Encoders qualified as E
 import Hasql.Pool qualified as Pool
 import Hasql.Session qualified as Session
 import Hasql.Statement qualified as Statement
-import PerformanceDatabase (runPgmqSession, withPgmqPools)
+import PerformanceDatabase (configureBenchmarkQueue, runPgmqSession, stabilizeBenchmarkQueues, withPgmqPools)
 import Pgmq.Effectful (PgmqRuntimeError, runPgmq)
 import Pgmq.Hasql.Sessions qualified as Sessions
 import Pgmq.Hasql.Statements.Types qualified as Q
@@ -75,6 +75,8 @@ runWorker scenario warmup sample seeds prepare = do
       whenTopic route $ do
         Sessions.bindTopic (Q.BindTopic pattern' dlq)
         Sessions.bindTopic (Q.BindTopic pattern' secondDlq)
+    mapM_ (configureBenchmarkQueue pool) [queue, dlq, secondDlq]
+    runPgmqSession pool $
       Session.statement () $
         Statement.unpreparable
           ( "insert into pgmq.q_perf_source (vt, message, headers) select now(), to_jsonb(repeat('x', "
@@ -89,12 +91,13 @@ runWorker scenario warmup sample seeds prepare = do
       runPgmqSession pool $
         Session.statement () $
           Statement.unpreparable
-            "select jsonb_build_object('server_version', current_setting('server_version'), 'shared_buffers', current_setting('shared_buffers'), 'work_mem', current_setting('work_mem'), 'fsync', current_setting('fsync'), 'synchronous_commit', current_setting('synchronous_commit'), 'max_connections', current_setting('max_connections'))"
+            "select jsonb_build_object('server_version', current_setting('server_version'), 'shared_buffers', current_setting('shared_buffers'), 'work_mem', current_setting('work_mem'), 'fsync', current_setting('fsync'), 'synchronous_commit', current_setting('synchronous_commit'), 'max_connections', current_setting('max_connections'), 'autovacuum_naptime', current_setting('autovacuum_naptime'), 'max_wal_size', current_setting('max_wal_size'), 'checkpoint_timeout', current_setting('checkpoint_timeout'))"
             E.noParams
             (D.singleRow (D.column (D.nonNullable D.jsonb)))
     measuring <- newIORef False
     observations <- newIORef ([] :: [Double])
     finishAdmin <- prepare adminPool measuring
+    stabilizeBenchmarkQueues pool [queue, dlq, secondDlq]
     threads <- forM [1 .. workers :: Int] $ \_ -> async $ do
       outcome <- runEff $ runErrorNoCallStack @PgmqRuntimeError $ runPgmq pool $ runTracingNoop $ do
         adapter <- pgmqAdapter (mkPgmqAdapterEnv pool) config >>= either (error . show) pure
@@ -138,6 +141,13 @@ runWorker scenario warmup sample seeds prepare = do
             "select jsonb_build_object('blocksRead', blks_read, 'blocksHit', blks_hit, 'tempBytes', temp_bytes, 'blockReadTimeMs', blk_read_time, 'blockWriteTimeMs', blk_write_time) from pg_stat_database where datname = current_database()"
             E.noParams
             (D.singleRow (D.column (D.nonNullable D.jsonb)))
+    maintenance <-
+      runPgmqSession pool $
+        Session.statement () $
+          Statement.unpreparable
+            "select jsonb_build_object('tables', (select jsonb_agg(jsonb_build_object('table', pg_class.relname, 'options', reloptions, 'autoVacuumCount', autovacuum_count, 'autoAnalyzeCount', autoanalyze_count, 'manualVacuumCount', vacuum_count, 'manualAnalyzeCount', analyze_count, 'deadTuples', n_dead_tup)) from pg_class join pg_namespace on pg_namespace.oid = relnamespace join pg_stat_all_tables on pg_stat_all_tables.relid = pg_class.oid where nspname = 'pgmq' and pg_class.relname like 'q_perf_%'), 'checkpointer', (select to_jsonb(c) from pg_stat_checkpointer c))"
+            E.noParams
+            (D.singleRow (D.column (D.nonNullable D.jsonb)))
     let count = length samples
         seconds = fromIntegral (end - start) / 1e9 :: Double
         p95 = if count == 0 then 0 else samples !! min (count - 1) (ceiling (0.95 * fromIntegral count :: Double) - 1)
@@ -146,6 +156,7 @@ runWorker scenario warmup sample seeds prepare = do
       object
         [ "workerProcessCPUSeconds" .= (fromIntegral (cpuAfter - cpuBefore) / 1e12 :: Double),
           "databaseIOCounters" .= databaseIO,
+          "maintenance" .= maintenance,
           "administration" .= adminResult,
           "databaseSettings" .= databaseSettings,
           "scenario" .= scenario,

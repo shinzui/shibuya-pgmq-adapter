@@ -25,7 +25,7 @@ import Hasql.Session qualified as S
 import Hasql.Statement qualified as St
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TS
-import PerformanceDatabase (runPgmqSession, withPgmqDb)
+import PerformanceDatabase (configureBenchmarkQueue, runPgmqSession, stabilizeBenchmarkQueues, withPgmqDb)
 import Pgmq.Hasql.Sessions qualified as Q
 import Pgmq.Hasql.Statements.Inspection qualified as Inspection
 import Pgmq.Types qualified as P
@@ -76,13 +76,14 @@ seed pool layout rows bytes = do
   runPgmqSession pool $ do
     Q.createQueue source
     (if layout == "unlogged" then Q.createUnloggedQueue else Q.createQueue) dlq
+  mapM_ (configureBenchmarkQueue pool) [source, dlq]
   sql pool $
     "insert into pgmq.q_perf_admin (vt, message, headers) select now(), jsonb_build_object('original_message', repeat('x', "
       <> T.pack (show (bytes - 2))
       <> "), 'original_queue', 'perf_source', 'dead_letter_reason_code', 'invalid_payload', 'dead_letter_reason_detail', 'invalid'), '{}'::jsonb from generate_series(1, "
       <> T.pack (show rows)
       <> ")"
-  sql pool "analyze pgmq.q_perf_admin"
+  stabilizeBenchmarkQueues pool [source, dlq]
 
 prepareAdmin :: String -> Int -> Pool.Pool -> IORef Bool -> IO (IO Value)
 prepareAdmin mode seconds pool measuring
@@ -96,7 +97,9 @@ prepareAdmin mode seconds pool measuring
           -- Workers have already seeded their source. Only this separate DLQ is
           -- initialized here; avoid recreating the source queue.
           runPgmqSession pool (Q.createQueue dlq)
+          configureBenchmarkQueue pool dlq
           sql pool "insert into pgmq.q_perf_admin (vt, message, headers) select now(), jsonb_build_object('original_message', 'background', 'original_queue', 'perf_source', 'dead_letter_reason_code', 'invalid_payload', 'dead_letter_reason_detail', repeat('x', 1000), 'original_headers', jsonb_build_object('x-pgmq-group', (i % 100)::text)), '{}'::jsonb from generate_series(1, 100000) i"
+          stabilizeBenchmarkQueues pool [dlq]
           semaphore <- newQSem 2
           observations <- newIORef ([] :: [(Bool, Double, String)])
           started <- newIORef (0 :: Int)
