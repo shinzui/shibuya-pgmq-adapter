@@ -42,6 +42,7 @@ import Numeric.Natural (Natural)
 import Pgmq.Effectful (PgmqRuntimeError)
 import Pgmq.Types (QueueName, RoutingKey)
 import Pgmq.Types qualified as Pgmq
+import Shibuya.Adapter (AdapterTelemetry, defaultAdapterTelemetry)
 
 -- | Runtime resources and callbacks used by the adapter.
 data PgmqAdapterEnv = PgmqAdapterEnv
@@ -99,7 +100,18 @@ data PgmqAdapterConfig = PgmqAdapterConfig
     -- See 'PrefetchConfig' for the visibility-timeout trade-off and the bounded,
     -- loss-free shutdown behaviour (buffered messages are redelivered after
     -- their visibility timeout rather than released immediately).
-    prefetchConfig :: !(Maybe PrefetchConfig)
+    prefetchConfig :: !(Maybe PrefetchConfig),
+    -- | Telemetry options copied unchanged into the 'Shibuya.Adapter.Adapter'.
+    --
+    -- The default is 'defaultAdapterTelemetry', whose @traceCorrelation@ is
+    -- 'Shibuya.Adapter.ParentAndLink': the processing span is a child of the
+    -- span that sent the message and also links to it, so a job appears in
+    -- the sending request's trace. Choose 'Shibuya.Adapter.LinkOnly' with
+    -- @defaultAdapterTelemetry {traceCorrelation = LinkOnly}@ when messages
+    -- are sent with long delays or retried over long visibility timeouts:
+    -- each delivery then starts its own trace and is related to the sender
+    -- only by the link, instead of extending a trace that ended long ago.
+    telemetry :: !AdapterTelemetry
   }
   deriving stock (Show, Eq, Generic)
 
@@ -295,5 +307,6 @@ defaultConfig name =
       haltVisibilityTimeout = Nothing,
       maxRetries = 3,
       fifoConfig = Nothing,
-      prefetchConfig = Nothing
+      prefetchConfig = Nothing,
+      telemetry = defaultAdapterTelemetry
     }

@@ -88,6 +88,11 @@ module Shibuya.Adapter.Pgmq
     FifoReadStrategy (..),
     validateConfig,
 
+    -- * Telemetry
+    AdapterTelemetry (traceCorrelation),
+    defaultAdapterTelemetry,
+    TraceCorrelation (..),
+
     -- * Smart Constructors
     directDeadLetter,
     topicDeadLetter,
@@ -146,7 +151,7 @@ import Pgmq.Types
     routingKeyToText,
     topicPatternToText,
   )
-import Shibuya.Adapter (Adapter (..))
+import Shibuya.Adapter (Adapter (..), AdapterTelemetry (traceCorrelation), TraceCorrelation (..), defaultAdapterTelemetry)
 import Shibuya.Adapter.Pgmq.Config
   ( DeadLetterConfig (..),
     DeadLetterTarget (..),
@@ -216,7 +221,8 @@ pgmqAdapter env config =
           Adapter
             { adapterName = "pgmq:" <> queueNameToText validConfig.queueName,
               source = messageSource,
-              shutdown = liftIO $ atomically $ writeTVar shutdownVar True
+              shutdown = liftIO $ atomically $ writeTVar shutdownVar True,
+              telemetry = validConfig.telemetry
             }
 
 -- | Poll in chunks so a shutdown can release messages that were read from pgmq

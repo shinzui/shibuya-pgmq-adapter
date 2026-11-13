@@ -3,6 +3,7 @@ module Main (main) where
 import Shibuya.Adapter.Pgmq.ChaosSpec qualified as ChaosSpec
 import Shibuya.Adapter.Pgmq.ConfigSpec qualified as ConfigSpec
 import Shibuya.Adapter.Pgmq.ConvertSpec qualified as ConvertSpec
+import Shibuya.Adapter.Pgmq.CorrelationSpec qualified as CorrelationSpec
 import Shibuya.Adapter.Pgmq.DeadLetterSpec qualified as DeadLetterSpec
 import Shibuya.Adapter.Pgmq.IntegrationSpec qualified as IntegrationSpec
 import Shibuya.Adapter.Pgmq.InternalSpec qualified as InternalSpec
@@ -19,4 +20,5 @@ main = hspec $ do
     describe "Shibuya.Adapter.Pgmq Properties" PropertySpec.spec
   describe "Integration Tests" IntegrationSpec.spec
   describe "Chaos Tests" ChaosSpec.spec
+  describe "Trace Correlation Tests" CorrelationSpec.spec
   DeadLetterSpec.spec

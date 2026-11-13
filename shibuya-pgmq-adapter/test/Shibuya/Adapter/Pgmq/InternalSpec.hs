@@ -18,6 +18,7 @@ import Pgmq.Effectful (Pgmq, PgmqRuntimeError (..))
 import Pgmq.Effectful.Effect qualified as PgmqEffect
 import Pgmq.Hasql.Statements.Types (ReadGrouped (..), ReadGroupedWithPoll (..), ReadMessage (..), ReadWithPollMessage (..))
 import Pgmq.Types (Message (..), MessageBody (..), MessageId (..), parseQueueName, queueNameToText)
+import Shibuya.Adapter (defaultAdapterTelemetry)
 import Shibuya.Adapter.Pgmq.Config
   ( FifoConfig (..),
     FifoReadStrategy (..),
@@ -104,7 +105,8 @@ mkReadMessageSpec = describe "mkReadMessage" $ do
             haltVisibilityTimeout = Nothing,
             maxRetries = 3,
             fifoConfig = Nothing,
-            prefetchConfig = Nothing
+            prefetchConfig = Nothing,
+            telemetry = defaultAdapterTelemetry
           }
       ReadMessage
         { queueName = queryQueueName,
@@ -143,7 +145,8 @@ mkReadWithPollSpec = describe "mkReadWithPoll" $ do
             haltVisibilityTimeout = Nothing,
             maxRetries = 3,
             fifoConfig = Nothing,
-            prefetchConfig = Nothing
+            prefetchConfig = Nothing,
+            telemetry = defaultAdapterTelemetry
           }
       ReadWithPollMessage
         { queueName = queryQueueName,
@@ -190,7 +193,8 @@ mkReadGroupedSpec = describe "mkReadGrouped" $ do
             haltVisibilityTimeout = Nothing,
             maxRetries = 3,
             fifoConfig = Nothing,
-            prefetchConfig = Nothing
+            prefetchConfig = Nothing,
+            telemetry = defaultAdapterTelemetry
           }
       ReadGrouped
         { queueName = queryQueueName,
@@ -503,7 +507,8 @@ retryTestConfig attempts =
           haltVisibilityTimeout = Nothing,
           maxRetries = 3,
           fifoConfig = Nothing,
-          prefetchConfig = Nothing
+          prefetchConfig = Nothing,
+          telemetry = defaultAdapterTelemetry
         }
 
 runStubPgmq ::

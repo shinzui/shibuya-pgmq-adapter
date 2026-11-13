@@ -2,7 +2,7 @@ module Shibuya.Adapter.Pgmq.ConfigSpec (spec) where
 
 import Data.Either (isLeft, isRight)
 import Pgmq.Types (parseRoutingKey)
-import Shibuya.Adapter.Pgmq (parseQueueName)
+import Shibuya.Adapter.Pgmq (AdapterTelemetry (traceCorrelation), TraceCorrelation (..), defaultAdapterTelemetry, parseQueueName)
 import Shibuya.Adapter.Pgmq.Config
 import Test.Hspec
 
@@ -55,6 +55,14 @@ defaultConfigSpec = describe "defaultConfig" $ do
 
   it "sets fifoConfig to Nothing" $ do
     config.fifoConfig `shouldBe` Nothing
+
+  it "uses the default adapter telemetry, whose correlation is ParentAndLink" $ do
+    config.telemetry `shouldBe` defaultAdapterTelemetry
+    config.telemetry.traceCorrelation `shouldBe` ParentAndLink
+
+  it "validates a LinkOnly override and keeps it" $ do
+    let linkOnly = config {telemetry = defaultAdapterTelemetry {traceCorrelation = LinkOnly}}
+    fmap (\c -> c.telemetry.traceCorrelation) (validateConfig linkOnly) `shouldBe` Right LinkOnly
 
 -- | Tests for defaultPollingConfig
 defaultPollingConfigSpec :: Spec

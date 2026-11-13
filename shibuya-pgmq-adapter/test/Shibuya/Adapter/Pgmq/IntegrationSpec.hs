@@ -34,6 +34,7 @@ import Pgmq.Hasql.Statements.Types
     VisibilityTimeoutQuery (..),
   )
 import Pgmq.Types (Message (..), MessageBody (..), MessageHeaders (..), MessageId, QueueName)
+import Shibuya.Adapter (defaultAdapterTelemetry)
 import Shibuya.Adapter.Pgmq.Config
   ( FifoConfig (..),
     FifoReadStrategy (..),
@@ -448,7 +449,8 @@ _mkConfig queueName =
       haltVisibilityTimeout = Nothing,
       maxRetries = 3,
       fifoConfig = Nothing,
-      prefetchConfig = Nothing
+      prefetchConfig = Nothing,
+      telemetry = defaultAdapterTelemetry
     }
 
 -- | Create config with custom batch size
@@ -465,5 +467,6 @@ _mkConfigWithBatchSize qName bs =
       haltVisibilityTimeout = Nothing,
       maxRetries = 3,
       fifoConfig = Nothing,
-      prefetchConfig = Nothing
+      prefetchConfig = Nothing,
+      telemetry = defaultAdapterTelemetry
     }

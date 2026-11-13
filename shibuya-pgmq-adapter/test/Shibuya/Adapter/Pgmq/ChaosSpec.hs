@@ -40,7 +40,7 @@ import Pgmq.Hasql.Encoders qualified as Encoders
 import Pgmq.Hasql.Sessions qualified as Sessions
 import Pgmq.Hasql.Statements.Types (BindTopic (..), ReadMessage (..), SendMessage (..), SendMessageWithHeaders (..))
 import Pgmq.Types (Message (..), MessageBody (..), MessageHeaders (..), QueueName, parseQueueName, parseRoutingKey, parseTopicPattern)
-import Shibuya.Adapter (Adapter (..))
+import Shibuya.Adapter (Adapter (..), defaultAdapterTelemetry)
 import Shibuya.Adapter.Pgmq
   ( PgmqAcknowledgementException,
     PgmqAdapterConfig (..),
@@ -386,7 +386,7 @@ poisonMessageSpec = describe "Poison messages" $ do
         Vector.length messages `shouldBe` 1
         spans <- readIORef spansRef
         named <- mapM (\sp -> do hot <- readIORef (OTel.spanHot sp); pure (OTel.hotName hot, sp)) spans
-        case (Vector.uncons messages, [sp | ("dlq-identity process", sp) <- named]) of
+        case (Vector.uncons messages, [sp | ("process dlq-identity", sp) <- named]) of
           (Just (msg, _), [consumer]) -> case msg.headers of
             Just (Object hdrs) -> do
               let stringHeader k = case KeyMap.lookup k hdrs of
@@ -695,7 +695,7 @@ poisonMessageSpec = describe "Poison messages" $ do
           case ingestedResult of
             Nothing -> liftIO (expectationFailure "message should not auto-DLQ") >> pure ""
             Just ingested -> do
-              let adapter = Adapter "pgmq:test-terminal-ack-failure" (Stream.fromList [ingested]) (pure ())
+              let adapter = Adapter "pgmq:test-terminal-ack-failure" (Stream.fromList [ingested]) (pure ()) defaultAdapterTelemetry
                   processor = mkProcessor adapter (\_ -> pure $ AckDeadLetter $ PoisonPill "fail loudly")
               appResult <- runApp defaultAppConfig [(processorId, processor)]
               case appResult of
