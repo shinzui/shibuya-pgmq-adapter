@@ -6,6 +6,9 @@
 -- DATABASE_URL          - PostgreSQL connection string (required)
 -- OTEL_TRACING_ENABLED  - Enable OpenTelemetry tracing (default: false)
 -- OTEL_SERVICE_NAME     - Service name for tracing (default: shibuya-pgmq-example)
+-- OTEL_TRACE_LINK_ONLY  - Start each delivery in its own trace, linked to the
+--                         producer, instead of joining the producer's trace
+--                         (default: false)
 -- METRICS_PORT          - HTTP port for metrics server (default: 9090)
 -- @
 module Example.Config
@@ -38,6 +41,9 @@ data AppConfig = AppConfig
   { connectionString :: !ByteString,
     tracingEnabled :: !Bool,
     serviceName :: !Text,
+    -- | Use 'Shibuya.Adapter.LinkOnly' trace correlation instead of the
+    -- default 'Shibuya.Adapter.ParentAndLink'.
+    traceLinkOnly :: !Bool,
     metricsPort :: !Int
   }
   deriving stock (Show)
@@ -77,12 +83,14 @@ loadAppConfig = do
   connStr <- getEnv "DATABASE_URL"
   tracing <- getEnvBool "OTEL_TRACING_ENABLED" False
   svcName <- getEnvDefault "OTEL_SERVICE_NAME" "shibuya-pgmq-example"
+  linkOnly <- getEnvBool "OTEL_TRACE_LINK_ONLY" False
   port <- getEnvInt "METRICS_PORT" 9090
   pure
     AppConfig
       { connectionString = BS.pack connStr,
         tracingEnabled = tracing,
         serviceName = Text.pack svcName,
+        traceLinkOnly = linkOnly,
         metricsPort = port
       }
 

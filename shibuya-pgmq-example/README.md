@@ -105,6 +105,7 @@ cabal run shibuya-pgmq-simulator -- --queue notifications --count 1000 --batch-s
 | `DATABASE_URL` | PostgreSQL connection string | (required) |
 | `OTEL_TRACING_ENABLED` | Enable OpenTelemetry tracing | `false` |
 | `OTEL_SERVICE_NAME` | Service name for traces | `shibuya-pgmq-example` |
+| `OTEL_TRACE_LINK_ONLY` | Start each delivery's `process <queue>` span in its own trace, linked to the simulator's send span, instead of as its child (`LinkOnly` instead of `ParentAndLink`) | `false` |
 | `OTEL_SEMCONV_STABILITY_OPT_IN` | Select OpenTelemetry semantic-convention mode (`messaging,database` for stable attributes, `messaging/dup,database/dup` for old and stable attributes) | unset |
 | `METRICS_PORT` | HTTP port for metrics server | `9090` |
 
@@ -180,6 +181,11 @@ cabal run shibuya-pgmq-simulator -- --queue orders --count 10
 ```
 
 View traces at http://localhost:16686
+
+By default each `process orders` span is a child of the simulator's send span
+and also links to it, so one trace shows both. Restart the consumer with
+`OTEL_TRACE_LINK_ONLY=true` to see the other shape: each delivery is a separate
+trace whose root `process orders` span carries a link to the send span.
 
 The OTLP exporter uses HTTP/protobuf protocol (port 4318), not gRPC (port 4317).
 

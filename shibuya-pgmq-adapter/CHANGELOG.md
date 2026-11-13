@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.19.0.0 — Unreleased
+
+### Breaking Changes
+
+- Require [`shibuya-core`](mori://shinzui/shibuya/packages/shibuya-core) and
+  `shibuya-metrics` `^>=0.13.0.0`. Core 0.13 renames processing spans from
+  `<processor> process` to `process <processor>` and adds
+  `messaging.operation.name = "process"`; update trace queries, dashboards and
+  alerts that match the old span name.
+- Add the strict field `telemetry :: AdapterTelemetry` to `PgmqAdapterConfig`.
+  Configurations built from `defaultConfig` with record update need no change;
+  a full `PgmqAdapterConfig { .. }` literal must set it, normally to
+  `defaultAdapterTelemetry`.
+
+### New Features
+
+- Choose how a processing span relates to the span that sent the message with
+  `telemetry = defaultAdapterTelemetry {traceCorrelation = LinkOnly}`. The
+  default, `ParentAndLink`, keeps the processing span in the sender's trace as
+  its child and now also links to the sender. `LinkOnly` starts each delivery
+  in its own trace, linked to the sender, which suits delayed sends and long
+  retry cycles. Without a usable `traceparent` neither adds a link. Re-export
+  `AdapterTelemetry (traceCorrelation)`, `defaultAdapterTelemetry` and
+  `TraceCorrelation (..)` from `Shibuya.Adapter.Pgmq`.
+- Under `LinkOnly`, a dead-lettered message's `traceparent` names the
+  consumer's processing span in its own trace; the sender's original header is
+  still preserved under `x-shibuya-upstream-traceparent`. Dead-letter header
+  handling itself is unchanged.
+
+### Other Changes
+
+- Add PostgreSQL-backed correlation tests covering both policies, redelivery
+  and the dead-letter headers, and let the example consumer select `LinkOnly`
+  with `OTEL_TRACE_LINK_ONLY=true`.
+
 ## 0.18.0.0 — 2026-10-27
 
 ### Breaking Changes

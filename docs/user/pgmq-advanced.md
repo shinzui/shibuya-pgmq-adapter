@@ -154,6 +154,39 @@ Implementation note: prefetch uses Streamly's `parBuffered` under a
 locally-scoped effectful `ConcUnlift` strategy so the worker threads can unlift
 `Eff` safely; the non-prefetch path is unchanged.
 
+## Trace Correlation
+
+When a message carries a W3C `traceparent` header, Shibuya opens a Consumer
+span named `process <processor>` around your handler and always adds a *link*
+to the span that sent the message. The `telemetry` field of
+`PgmqAdapterConfig` decides whether that span is also the sender's child:
+
+```haskell
+import Shibuya.Adapter.Pgmq
+
+-- Default: the handler runs inside the sender's trace.
+config = defaultConfig queueName
+
+-- Each delivery starts its own trace, linked to the sender.
+linked =
+  (defaultConfig queueName)
+    { telemetry = defaultAdapterTelemetry {traceCorrelation = LinkOnly}
+    }
+```
+
+- `ParentAndLink` (the default) keeps one connected trace from the request
+  that sent the job to the job's processing, which is usually what a job queue
+  wants. Every redelivery also lands in that trace.
+- `LinkOnly` suits delayed sends and long retry cycles. Each delivery is its
+  own trace, so a retry an hour later does not stretch a request trace that
+  ended long ago, and a tail-sampling collector sees it as a new trace.
+
+Without a usable `traceparent` neither setting adds a link, and the span keeps
+whatever span is active on the processing thread as its parent. When a message
+is dead-lettered, the DLQ copy's `traceparent` names the processing span (in
+the sender's trace or in its own trace, per the setting) and the sender's
+original value moves to `x-shibuya-upstream-traceparent`.
+
 ## Configuration Examples
 
 ### High-Throughput Processing

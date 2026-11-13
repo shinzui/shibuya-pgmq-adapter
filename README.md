@@ -2,7 +2,7 @@
 
 PostgreSQL message queue adapter for the [Shibuya](https://github.com/shinzui/shibuya) queue-processing framework.
 
-Integrates with [pgmq](https://github.com/pgmq/pgmq) via [`pgmq-hs`](https://github.com/shinzui/pgmq-hs). Provides visibility-timeout-based leasing, automatic retry handling, optional dead-letter queue support, and OpenTelemetry tracing on the `hs-opentelemetry` 1.0 package family. Shibuya processing spans use the stable `messaging.operation.type` key, and `pgmq-effectful` supports old, stable, or duplicate messaging/database attributes through `OTEL_SEMCONV_STABILITY_OPT_IN`.
+Integrates with [pgmq](https://github.com/pgmq/pgmq) via [`pgmq-hs`](https://github.com/shinzui/pgmq-hs). Provides visibility-timeout-based leasing, automatic retry handling, optional dead-letter queue support, and OpenTelemetry tracing on the `hs-opentelemetry` 1.0 package family. Shibuya processing spans are named `process <processor>`, carry `messaging.operation.name` and the stable `messaging.operation.type` key, and link to the producer's span; the `telemetry` configuration field chooses whether they also join the producer's trace (`ParentAndLink`, the default) or start their own (`LinkOnly`). `pgmq-effectful` supports old, stable, or duplicate messaging/database attributes through `OTEL_SEMCONV_STABILITY_OPT_IN`.
 
 ## Packages
 

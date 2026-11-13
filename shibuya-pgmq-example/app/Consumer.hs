@@ -45,10 +45,13 @@ import OpenTelemetry.Trace.Core qualified as OTel
 import Pgmq.Effectful (runPgmqTraced)
 import Pgmq.Effectful.Interpreter (PgmqRuntimeError)
 import Shibuya.Adapter.Pgmq
-  ( FifoConfig (..),
+  ( AdapterTelemetry (traceCorrelation),
+    FifoConfig (..),
     FifoReadStrategy (..),
     PgmqAdapterConfig (..),
     PollingConfig (..),
+    TraceCorrelation (..),
+    defaultAdapterTelemetry,
     directDeadLetter,
     pgmqAdapter,
   )
@@ -310,9 +313,11 @@ runDefaultMain = do
   Text.putStrLn "=== Shibuya PGMQ Consumer ==="
   Text.putStrLn ""
 
-  AppConfig {connectionString, tracingEnabled, serviceName, metricsPort} <- Config.loadAppConfig
+  AppConfig {connectionString, tracingEnabled, serviceName, traceLinkOnly, metricsPort} <- Config.loadAppConfig
+  let correlation = if traceLinkOnly then LinkOnly else ParentAndLink
   Text.putStrLn "Configuration:"
   Text.putStrLn $ "  Tracing enabled: " <> Text.pack (show tracingEnabled)
+  Text.putStrLn $ "  Trace correlation: " <> Text.pack (show correlation)
   Text.putStrLn $ "  Service name: " <> serviceName
   Text.putStrLn $ "  Metrics port: " <> Text.pack (show metricsPort)
   Text.putStrLn ""
@@ -331,7 +336,7 @@ runDefaultMain = do
     Text.putStrLn ""
 
     withTracing tracingEnabled serviceName $ \tracer -> do
-      runConsumer pool tracer metricsPort shutdownVar
+      runConsumer pool tracer correlation metricsPort shutdownVar
 
 runBackoffDemoMain :: BackoffPolicy -> IO ()
 runBackoffDemoMain policy = do
@@ -407,16 +412,18 @@ runBackoffDemoConsumer pool tracer policy failuresRef shutdownVar = do
 runConsumer ::
   Pool.Pool ->
   OTel.Tracer ->
+  TraceCorrelation ->
   Int ->
   MVar () ->
   IO ()
-runConsumer pool tracer metricsPort shutdownVar = do
+runConsumer pool tracer correlation metricsPort shutdownVar = do
   eResult <- runEff $ runErrorNoCallStack @PgmqRuntimeError $ runPgmqTraced pool tracer $ runTracing tracer $ do
     let env = Pgmq.mkPgmqAdapterEnv pool
     -- Create adapters
-    ordersAdapter <- requireAdapter "orders" =<< pgmqAdapter env ordersAdapterConfig
-    paymentsAdapter <- requireAdapter "payments" =<< pgmqAdapter env paymentsAdapterConfig
-    notificationsAdapter <- requireAdapter "notifications" =<< pgmqAdapter env notificationsAdapterConfig
+    let correlated config = config {telemetry = defaultAdapterTelemetry {traceCorrelation = correlation}}
+    ordersAdapter <- requireAdapter "orders" =<< pgmqAdapter env (correlated ordersAdapterConfig)
+    paymentsAdapter <- requireAdapter "payments" =<< pgmqAdapter env (correlated paymentsAdapterConfig)
+    notificationsAdapter <- requireAdapter "notifications" =<< pgmqAdapter env (correlated notificationsAdapterConfig)
 
     liftIO $ Text.putStrLn "Adapters created"
 

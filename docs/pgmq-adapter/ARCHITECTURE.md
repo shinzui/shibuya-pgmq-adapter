@@ -197,7 +197,7 @@ pgmqMessageToEnvelope msg =
 
 Notes on the populated fields:
 
-- `traceContext` is derived from the message's `traceparent`/`tracestate` header keys via `extractTraceHeaders` (or `Nothing` when absent).
+- `traceContext` is derived from the message's `traceparent`/`tracestate` header keys via `extractTraceHeaders` (or `Nothing` when absent). Shibuya, not the adapter, opens the `process <processor>` Consumer span from it: the span always links to the producer context, and the adapter's `telemetry` value, copied unchanged from `PgmqAdapterConfig.telemetry` into `Adapter.telemetry`, decides whether it is also the producer's child (`ParentAndLink`, the default) or a root in a new trace (`LinkOnly`). Redeliveries carry the same headers, so each delivery links to the same producer span.
 - `attempt` is derived from pgmq's `readCount` via `readCountToAttempt` (readCount is 1-based, so first delivery maps to `Attempt 0`).
 - `headers` is deliberately `Nothing`: the JSONB `headers` object is unordered user metadata, consumed only to derive `partition` and `traceContext`, and is not re-presented as broker headers.
 - `attributes` is left empty (`HashMap.empty`) as a forward-compatible hook; there are no spec-defined pgmq messaging attributes yet.
@@ -263,7 +263,7 @@ The target is selected from `dlqConfig.dlqTarget :: DeadLetterTarget`:
 - `DirectQueue queueName` — sends the DLQ copy to a specific queue (`sendMessage` / `sendMessageWithHeaders`).
 - `TopicRoute routingKey` — routes the DLQ copy by routing key (`sendTopic` / `sendTopicWithHeaders`).
 
-The consumer's current trace headers are merged into the DLQ message's headers via `mergeDlqHeaders`: the consumer's active `traceparent`/`tracestate` take the active slot, and the original message's `traceparent`/`tracestate` (if present) are preserved under `x-shibuya-upstream-traceparent` / `x-shibuya-upstream-tracestate`. When there is no active span the original headers are forwarded verbatim. When headers are present the `*WithHeaders` statement variants are used; otherwise the plain variants.
+The consumer's current trace headers are merged into the DLQ message's headers via `mergeDlqHeaders`: the consumer's active `traceparent`/`tracestate` take the active slot, and the original message's `traceparent`/`tracestate` (if present) are preserved under `x-shibuya-upstream-traceparent` / `x-shibuya-upstream-tracestate`. When there is no active span the original headers are forwarded verbatim. Under `LinkOnly` the active value names a span in the consumer's own trace rather than one in the producer's; the producer stays reachable through the upstream headers and through the processing span's link. When headers are present the `*WithHeaders` statement variants are used; otherwise the plain variants.
 
 DLQ payload structure:
 ```json
