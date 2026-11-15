@@ -21,7 +21,7 @@
 module Main (main) where
 
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async (async, cancel, wait)
+import Control.Concurrent.Async (cancel, wait, withAsync)
 import Control.Concurrent.STM (TVar, atomically, modifyTVar', newTVarIO, readTVarIO)
 import Control.Exception qualified as Exception
 import Control.Monad (forever, unless)
@@ -391,43 +391,41 @@ runEnduranceTest config pool queueName = do
       hPutStrLn csvHandle (Text.unpack csvHeader)
       hFlush csvHandle
 
-      producerAsync <- async $ runProducer pool queueName config.messagesPerSecond producedVar failedRef ledger stopVar
+      withAsync (runProducer pool queueName config.messagesPerSecond producedVar failedRef ledger stopVar) $ \producerAsync ->
+        withAsync (runSampler config pool queueName startTime producedVar processedRef failedRef csvHandle) $ \samplerAsync -> do
+          putStrLn $ "Running for " <> show config.durationSecs <> " seconds..."
+          runProcessorSegment config pool queueName processedRef failedRef ledger $ do
+            threadDelay (config.restartAtSecs * 1_000_000)
+            putStrLn "\nGraceful midpoint stop..."
 
-      samplerAsync <- async $ runSampler config pool queueName startTime producedVar processedRef failedRef csvHandle
+          putStrLn "Restarting processor with the same durable queue..."
+          let remainingSecs = config.durationSecs - config.restartAtSecs
+          runProcessorSegment config pool queueName processedRef failedRef ledger $ do
+            threadDelay (remainingSecs * 1_000_000)
+            putStrLn "\nStopping producer and draining after restart..."
+            atomically $ modifyTVar' stopVar (const True)
+            wait producerAsync
+            waitForDrain producedVar processedRef 30
+            waitForQueueDrain pool queueName 30
 
-      putStrLn $ "Running for " <> show config.durationSecs <> " seconds..."
-      runProcessorSegment config pool queueName processedRef failedRef ledger $ do
-        threadDelay (config.restartAtSecs * 1_000_000)
-        putStrLn "\nGraceful midpoint stop..."
+          cancel samplerAsync
+          finalSample <- sampleMetrics pool queueName startTime producedVar processedRef failedRef
+          hPutStrLn csvHandle (Text.unpack $ sampleToCsv finalSample)
+          hFlush csvHandle
 
-      putStrLn "Restarting processor with the same durable queue..."
-      let remainingSecs = config.durationSecs - config.restartAtSecs
-      runProcessorSegment config pool queueName processedRef failedRef ledger $ do
-        threadDelay (remainingSecs * 1_000_000)
-        putStrLn "\nStopping producer and draining after restart..."
-        atomically $ modifyTVar' stopVar (const True)
-        wait producerAsync
-        waitForDrain producedVar processedRef 30
-        waitForQueueDrain pool queueName 30
+          putStrLn "Processor stopped"
 
-      cancel samplerAsync
-      finalSample <- sampleMetrics pool queueName startTime producedVar processedRef failedRef
-      hPutStrLn csvHandle (Text.unpack $ sampleToCsv finalSample)
-      hFlush csvHandle
+          -- Wait a bit for final processing
+          threadDelay 1_000_000
 
-      putStrLn "Processor stopped"
+          (_, finalMem) <- getMemoryBytes
+          produced <- readTVarIO producedVar
+          processed <- readIORef processedRef
+          failed <- readIORef failedRef
+          ledgerPassed <- writeDeliveryLedger config ledger
 
-      -- Wait a bit for final processing
-      threadDelay 1_000_000
-
-      (_, finalMem) <- getMemoryBytes
-      produced <- readTVarIO producedVar
-      processed <- readIORef processedRef
-      failed <- readIORef failedRef
-      ledgerPassed <- writeDeliveryLedger config ledger
-
-      let result = checkCriteria initialMem finalMem produced processed failed
-      pure $ if ledgerPassed then result else result {passed = False, errors = result.errors <> ["Per-delivery ledger did not reconcile"]}
+          let result = checkCriteria initialMem finalMem produced processed failed
+          pure $ if ledgerPassed then result else result {passed = False, errors = result.errors <> ["Per-delivery ledger did not reconcile"]}
 
 runProcessorSegment ::
   EnduranceConfig ->

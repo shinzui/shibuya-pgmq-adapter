@@ -38,29 +38,52 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
 
 
-def upper_bound(values, seed=SEED):
+def bootstrap_bounds(values, seed=SEED):
     if len(values) < 7 or any(not math.isfinite(v) or v <= 0 for v in values):
         raise ValueError("require seven finite, positive paired ratios")
     rng = random.Random(seed)
     medians = sorted(statistics.median(rng.choices(values, k=len(values))) for _ in range(10_000))
-    return medians[9499]
+    return medians[499], medians[9499]
+
+
+def upper_bound(values, seed=SEED):
+    return bootstrap_bounds(values, seed)[1]
 
 
 def gate(name, ratios, limit):
-    bound = upper_bound(ratios)
+    lower, bound = bootstrap_bounds(ratios)
+    # Failure to establish non-inferiority is not evidence of a regression.
+    # PASS retains exactly the original upper-bound requirement.
+    status = "PASS" if bound <= limit else "FAIL" if lower > limit else "INCONCLUSIVE"
     return {"name": name, "ratios": ratios, "median": statistics.median(ratios),
-            "upper95": bound, "limit": limit, "status": "PASS" if bound <= limit else "FAIL"}
+            "lower95": lower, "upper95": bound, "limit": limit, "status": status}
+
+
+def result_status(gates):
+    if any(row["status"] == "FAIL" for row in gates):
+        return "FAIL"
+    return "PASS" if gates and all(row["status"] == "PASS" for row in gates) else "INCONCLUSIVE"
 
 
 def worker_gates(name, controls, candidates, dlq=False, loaded=False):
     if len(controls) != len(candidates) or not all(r.get("valid") for r in controls + candidates):
         raise ValueError(f"{name}: invalid or missing worker observations")
     for run in controls + candidates:
+        if run.get("measurementMode", "continuous") != "continuous":
+            raise ValueError(f"{name}: unsupported measurement protocol; cannot reuse diagnostic windows")
+        if (run.get("committed", 0) < 1000 or run.get("warmupSeconds", 0) < 10
+                or run.get("sampleSeconds", 0) < 60
+                or run.get("remaining", 0) <= run.get("workers", 0) * run.get("batchSize", 0)):
+            raise ValueError(f"{name}: insufficient duration, observations or source backlog")
         tables = run.get("maintenance", {}).get("tables", [])
         if not tables or any(table["autoVacuumCount"] or table["autoAnalyzeCount"]
                              or table["manualVacuumCount"] < 1 or table["manualAnalyzeCount"] < 1
                              or "autovacuum_enabled=false" not in table["options"] for table in tables):
             raise ValueError(f"{name}: uncontrolled fixture maintenance invalidates measurement")
+    identity = ("scenario", "seedCount", "workers", "workerConnections", "batchSize", "bodyBytes", "fifo", "metadata", "clock", "databaseSettings", "warmupSeconds", "requestedSampleSeconds")
+    for key in identity:
+        if any(key not in run or run[key] != controls[0].get(key) for run in controls + candidates):
+            raise ValueError(f"{name}: mismatched worker fixture: {key}")
     gates = [gate(name + "/throughput", [b["throughput"] / c["throughput"] for b,c in zip(controls,candidates)], 1 / 0.95),
              gate(name + "/p95", [c["p95Ms"] / b["p95Ms"] for b,c in zip(controls,candidates)], 1.10)]
     if not loaded:
@@ -73,7 +96,10 @@ def worker_gates(name, controls, candidates, dlq=False, loaded=False):
     if loaded:
         for run in candidates:
             admin = run["administration"]
-            if admin["successful"] / admin["scheduled"] < 0.99 or admin["completed"] != admin["scheduled"]:
+            scheduled = 11 * run["requestedSampleSeconds"]
+            if (admin["scheduled"] != scheduled or admin["started"] != scheduled
+                    or admin["completed"] != scheduled or admin["successful"] < 0.99 * scheduled
+                    or admin["successful"] > scheduled or admin["failed"] != scheduled - admin["successful"]):
                 gates.append({"name": name + "/admin-completion", "status": "FAIL", "counts": admin})
     return gates
 
@@ -81,6 +107,9 @@ def worker_gates(name, controls, candidates, dlq=False, loaded=False):
 def encoding_gates(encoding):
     if len(encoding["current"]) < 7 or len(encoding["current"]) != len(encoding["aware"]) or any(len(cases) != 30 for runs in encoding.values() for cases in runs):
         raise ValueError("incomplete encoding matrix")
+    if any(len({(case["reason"], case["bodyBytes"], case["metadata"]) for case in cases}) != 30
+           for runs in encoding.values() for cases in runs):
+        raise ValueError("duplicate encoding cases cannot replace missing coverage")
     gates = []
     for index in range(30):
         old = [cases[index] for cases in encoding["current"]]
@@ -161,8 +190,9 @@ def source_patch(original, modified):
 
 
 class Experiment:
-    def __init__(self, output):
+    def __init__(self, output, scope="full"):
         self.output = output
+        self.scope = scope
         self.sequence = 0
         self.runs = []
         self.gates = []
@@ -212,7 +242,7 @@ class Experiment:
         return record
 
     def save(self, status):
-        write_json(self.output / "result.json", {"status": status, "bootstrapSeed": SEED, "bootstrapResamples": 10000,
+        write_json(self.output / "result.json", {"status": status, "scope": self.scope, "bootstrapSeed": SEED, "bootstrapResamples": 10000,
             "runs": self.runs, "gates": self.gates, "resumedFrom": str(self.parent) if self.parent else None})
 
 
@@ -233,27 +263,51 @@ def plans_use_indexes(value):
                     and "msg_id" in node.get("Index Cond", "") for node in nodes))
 
 
+def verified_binaries(parent):
+    manifest = parent / "binaries.json"
+    if not manifest.exists():
+        raise ValueError("parent lacks binary hashes; do not reuse unverified executables")
+    binaries = json.loads(manifest.read_text())
+    if set(binaries) != {"original", "matched", "candidate"}:
+        raise ValueError("incomplete comparison binaries")
+    for kind, binary in binaries.items():
+        if hashlib.sha256(Path(binary["path"]).read_bytes()).hexdigest() != binary["sha256"]:
+            raise ValueError("measured binary changed: " + kind)
+    return {kind: binary["path"] for kind, binary in binaries.items()}
+
+
 def verify_frozen_parent(parent, baseline):
     if not parent.is_relative_to(ROOT / ".dev"):
         raise ValueError("parent experiment must be under this checkout's .dev")
     previous = json.loads((parent / "result.json").read_text())
     if previous["status"] == "RUNNING":
         raise ValueError("wait for the parent experiment to finish")
+    if previous.get("scope", "full") == "repeatability":
+        raise ValueError("repeatability measurements cannot resume a release comparison")
     environment = json.loads((parent / "environment.json").read_text())
     if environment["baselineCommit"] != baseline:
         raise ValueError("baseline differs from parent")
     for name, command in (("ghc", ["ghc", "--numeric-version"]), ("postgresql", ["postgres", "--version"]), ("cabal", ["cabal", "--version"])):
         if capture.query(command, ROOT) != environment[name]:
             raise ValueError(name + " differs from parent")
-    for relative, digest in json.loads((parent / "candidate-sha256.json").read_text()).items():
+    hashes = json.loads((parent / "candidate-sha256.json").read_text())
+    def measured(path):
+        return path.suffix in (".hs", ".cabal", ".nix") or path.name in ("cabal.project", "flake.lock")
+    current = {p for p in subprocess.check_output(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=ROOT).decode().split("\0")
+        if p and (ROOT / p).is_file()}
+    if {p for p in current if measured(Path(p))} != {p for p in hashes if measured(Path(p))}:
+        raise ValueError("measured source file set changed")
+    for relative, digest in hashes.items():
         path = ROOT / relative
-        if path.suffix in (".hs", ".cabal", ".nix") or path.name in ("cabal.project", "flake.lock"):
+        if measured(path):
             if not path.exists() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
                 raise ValueError("measured source/constraints changed: " + relative)
     if environment["machine"] != platform.machine() or environment["cpuCount"] != os.cpu_count():
         raise ValueError("hardware differs from parent")
     if environment.get("hardware") and capture.query(["sysctl", "hw.model", "hw.memsize", "machdep.cpu.brand_string"], ROOT) != environment["hardware"]:
         raise ValueError("hardware differs from parent")
+    verified_binaries(parent)
     return previous, environment
 
 
@@ -270,7 +324,12 @@ def main():
     parser.add_argument("--resume-from", type=Path, help="retain every matching measurement from a finished parent")
     parser.add_argument("--case-seed-count", dest="case_seed_counts", action="append", default=[], help="fixed source fixture SCENARIO=ROWS (defaults ack-fifo=500000, fifo-load-one=100000)")
     parser.add_argument("--encoding-pairs", type=int, default=7, help="fixed encoding pair count, chosen before measurement")
+    focused = parser.add_mutually_exclusive_group()
+    focused.add_argument("--worker-only", choices=SCENARIOS, help="compare one worker case; never certifies the full matrix")
+    focused.add_argument("--repeatability", choices=SCENARIOS, help="compare the original binary against itself in both directions; never certifies a release")
     args = parser.parse_args()
+    if args.repeatability and args.resume_from:
+        parser.error("repeatability requires fresh same-binary pairs; cannot resume a comparison")
     if not args.smoke and (args.pairs < 7 or args.encoding_pairs < 7 or args.warmup_seconds < 10 or args.sample_seconds < 60):
         parser.error("acceptance requires >=7 pairs, >=10s warmup and >=60s samples")
     if args.pairs < 1 or args.ack_one_pairs < 1 or args.encoding_pairs < 1 or args.warmup_seconds < 0 or args.sample_seconds < 1 or args.seed_count < 1000:
@@ -288,7 +347,8 @@ def main():
     if not output.is_relative_to(ROOT / ".dev"):
         parser.error("output must be under this checkout's .dev directory")
     output.mkdir(parents=True, exist_ok=False)
-    experiment = Experiment(output)
+    scope = "repeatability" if args.repeatability else "worker" if args.worker_only else "full"
+    experiment = Experiment(output, scope)
     try:
         baseline = capture.query(["git", "rev-parse", args.baseline_ref + "^{commit}"], ROOT)
         env = {"baselineCommit": baseline, "candidateCommit": capture.query(["git", "rev-parse", "HEAD"], ROOT),
@@ -314,11 +374,11 @@ def main():
                 shutil.copy2(parent / (kind + "-dependencies.json"), output / (kind + "-dependencies.json"))
             for filename in ("candidate-sha256.json", "original-instrumentation.patch", "matched-compatibility.patch", "candidate-working.patch"):
                 shutil.copy2(parent / filename, output / filename)
-            binaries = {}
-            for kind in ("original", "matched", "candidate"):
-                target = "dlq-admin-performance" if kind == "candidate" else "dlq-performance"
-                binaries[kind] = str(next(path for path in (parent / (kind + "-source") / "dist-performance").rglob(target)
-                                          if path.is_file() and os.access(path, os.X_OK)))
+            binaries = {kind: binary["path"] for kind, binary in json.loads((parent / "binaries.json").read_text()).items()}
+        elif args.repeatability:
+            original = snapshot(output, "original", baseline)
+            instrument(original, False)
+            binaries = {"original": build(output, original, "original")}
         else:
             original = snapshot(output, "original", baseline)
             pristine = snapshot(output, "pristine", baseline)
@@ -333,6 +393,25 @@ def main():
             write_json(output / "candidate-sha256.json", hashes)
             binaries = {"original": build(output, original, "original"), "matched": build(output, matched, "matched"),
                         "candidate": build(output, candidate, "candidate", True)}
+        write_json(output / "binaries.json", {kind: {"path": path, "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
+                                             for kind, path in binaries.items()})
+        if args.repeatability:
+            binary = binaries["original"]
+            data = {"a": [], "b": []}
+            scenario = args.repeatability
+            arguments = [scenario, args.warmup_seconds, args.sample_seconds,
+                         args.case_seed_counts.get(scenario, args.seed_count)]
+            for pair in range(args.pairs):
+                for label in (["a", "b"] if pair % 2 == 0 else ["b", "a"]):
+                    data[label].append(experiment.measure(binary, arguments, f"repeatability-{scenario}-{label}-{pair + 1}"))
+            if not args.smoke:
+                experiment.gates = (worker_gates("repeatability/a-to-b", data["a"], data["b"], scenario.startswith("dlq"))
+                                    + worker_gates("repeatability/b-to-a", data["b"], data["a"], scenario.startswith("dlq")))
+            # A same-binary failure diagnoses the experiment, never production.
+            status = "PASS" if result_status(experiment.gates) == "PASS" else "INCONCLUSIVE"
+            experiment.save(status)
+            print("DLQ-REPEATABILITY: " + status + " (not release acceptance)", flush=True)
+            return 0 if status == "PASS" else 1
         dependencies = {}
         for kind in ("original", "matched", "candidate"):
             plan = json.loads((output / (kind + "-dependencies.json")).read_text())
@@ -345,7 +424,7 @@ def main():
         warm, sample, seeds = args.warmup_seconds, args.sample_seconds, args.seed_count
         # Worker controls share one candidate sample per pair. Alternate order
         # against BOTH controls; all three run sequentially on fresh fixtures.
-        for scenario in SCENARIOS:
+        for scenario in ([args.worker_only] if args.worker_only else SCENARIOS):
             data = {k: [] for k in ("original", "matched", "candidate", "none")}
             worker_pairs = args.pairs
             if not args.smoke and scenario == "ack-one":
@@ -365,6 +444,11 @@ def main():
                 if data["none"]:
                     experiment.gates += worker_gates("idle-handle", data["none"], data["candidate"])
                 experiment.save("RUNNING")
+        if args.worker_only:
+            status = "INCONCLUSIVE" if args.smoke else result_status(experiment.gates)
+            experiment.save(status)
+            print("DLQ-WORKER: " + status + " (one case only; not full acceptance)", flush=True)
+            return 0 if status == "PASS" else 1
         for scenario in ("ack-load-one", "ack-load-fifty", "fifo-load-one", "fifo-load-fifty"):
             case_seeds = args.case_seed_counts.get(scenario, seeds)
             data = {"idle": [], "load": []}
@@ -389,9 +473,14 @@ def main():
             if not args.smoke:
                 if any(len(cases) != 12 for runs in data.values() for cases in runs):
                     raise ValueError("incomplete read matrix")
+                if any(len({(c["position"], c["limit"], c["fetch"]) for c in cases}) != 12
+                       for runs in data.values() for cases in runs):
+                    raise ValueError("duplicate read cases cannot replace missing coverage")
                 for index in range(12):
                     old = [cases[index] for cases in data["raw"]]
                     new = [cases[index] for cases in data["adapter"]]
+                    if len({(c["position"], c["limit"], c["fetch"]) for c in old + new}) != 1:
+                        raise ValueError("read fixture identities differ")
                     label = f"reads/{layout}/{depth}/{body}/{old[0]['position']}/{old[0]['limit']}/{old[0]['fetch']}"
                     if any(not plans_use_indexes(case["explain"]) or case["count"] < 1 for case in old + new):
                         raise ValueError(label + ": query plan or observations invalid")
@@ -414,7 +503,7 @@ def main():
                 "status": "PASS" if delta <= max(0.05 * control, 8 * 1024**2) else "FAIL"})
         if not args.smoke and len(experiment.gates) < 198:
             raise ValueError("incomplete performance gate matrix")
-        status = "INCONCLUSIVE" if args.smoke else "FAIL" if any(g["status"] != "PASS" for g in experiment.gates) else "PASS"
+        status = "INCONCLUSIVE" if args.smoke else result_status(experiment.gates)
         experiment.save(status)
         print("DLQ-PERFORMANCE: " + status, flush=True)
         return 0 if status == "PASS" else 1

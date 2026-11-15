@@ -77,7 +77,14 @@ withEphemeralPg action = do
   uid <- EphemeralUser.getEffectiveUserID
   let root = "/tmp/ephpg-shibuya-dlq-performance-" <> show uid
   EphemeralDirectory.createDirectoryIfMissing True root
-  let config = Pg.defaultConfig {Pg.temporaryRoot = EphemeralMonoid.Last (Just root)}
+  -- The 12MB test default in mori://shinzui/ephemeral-pg repeatedly evicts the
+  -- FIFO fixture during whole-queue reads. Use an explicit comparison budget;
+  -- this is benchmark configuration, not production database configuration.
+  let config =
+        Pg.defaultConfig
+          { Pg.temporaryRoot = EphemeralMonoid.Last (Just root),
+            Pg.postgresSettings = Pg.defaultConfig.postgresSettings <> [("shared_buffers", "'512MB'")]
+          }
   Pg.withConfig config action
 
 -- | Fixture-only policy. Prevent a fresh cluster's automatic VACUUM/ANALYZE

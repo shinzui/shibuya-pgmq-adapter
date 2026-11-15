@@ -3,9 +3,9 @@
 module WorkerPerformance (runWorker) where
 
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async (async, cancel, poll)
+import Control.Concurrent.Async (Async, cancel, poll, withAsync)
 import Control.Exception (throwIO)
-import Control.Monad (forM, forM_, replicateM_, unless, void)
+import Control.Monad (forM_, replicateM, replicateM_, unless, void)
 import Data.Aeson (Value, object, (.=))
 import Data.IORef
 import Data.List (sort)
@@ -36,7 +36,7 @@ import Streamly.Data.Stream qualified as Stream
 import System.CPUTime (getCPUTime)
 import System.Mem (performMajorGC)
 
-runWorker :: String -> Int -> Int -> Int -> (Pool.Pool -> IORef Bool -> IO (IO Value)) -> IO Value
+runWorker :: String -> Int -> Int -> Int -> (Pool.Pool -> IORef Bool -> (IO Value -> IO Value) -> IO Value) -> IO Value
 runWorker scenario warmup sample seeds prepare = do
   let (workers, batch, bytes, fifo, route, metadata) = case scenario of
         "ack-one" -> (1, 1, 100 :: Int, False, "none" :: String, False)
@@ -95,90 +95,105 @@ runWorker scenario warmup sample seeds prepare = do
             E.noParams
             (D.singleRow (D.column (D.nonNullable D.jsonb)))
     measuring <- newIORef False
-    observations <- newIORef ([] :: [Double])
-    finishAdmin <- prepare adminPool measuring
-    stabilizeBenchmarkQueues pool [queue, dlq, secondDlq]
-    threads <- forM [1 .. workers :: Int] $ \_ -> async $ do
-      outcome <- runEff $ runErrorNoCallStack @PgmqRuntimeError $ runPgmq pool $ runTracingNoop $ do
-        adapter <- pgmqAdapter (mkPgmqAdapterEnv pool) config >>= either (error . show) pure
-        Stream.fold Fold.drain $
-          Stream.mapM
-            ( \message -> do
-                start <- liftIO getMonotonicTimeNSec
-                message.ack.finalize decision
-                end <- liftIO getMonotonicTimeNSec
-                liftIO $ do
-                  active <- readIORef measuring
-                  if active && (case message.envelope.cursor of Just (CursorInt n) -> n <= fromIntegral seeds; _ -> error "worker fixture requires an original source message ID") then atomicModifyIORef' observations (\xs -> (fromIntegral (end - start) / 1e6 : xs, ())) else pure ()
-            )
-            adapter.source
-      either throwIO pure outcome
-    threadDelay (warmup * 1000000)
-    performMajorGC
-    before <- getRTSStats
-    cpuBefore <- getCPUTime
-    start <- getMonotonicTimeNSec
-    writeIORef measuring True
-    replicateM_ sample $ threadDelay 1000000
-    writeIORef measuring False
-    end <- getMonotonicTimeNSec
-    cpuAfter <- getCPUTime
-    forM_ threads $ \worker ->
-      poll worker >>= \case
-        Nothing -> pure ()
-        Just (Left err) -> throwIO err
-        Just (Right ()) -> error "worker stopped before measurement completed"
-    adminResult <- finishAdmin
-    mapM_ cancel threads
-    performMajorGC
-    after <- getRTSStats
-    samples <- sort <$> readIORef observations
-    remaining <- runPgmqSession pool $ Sessions.queueMetrics queue
-    databaseIO <-
-      runPgmqSession pool $
-        Session.statement () $
-          Statement.unpreparable
-            "select jsonb_build_object('blocksRead', blks_read, 'blocksHit', blks_hit, 'tempBytes', temp_bytes, 'blockReadTimeMs', blk_read_time, 'blockWriteTimeMs', blk_write_time) from pg_stat_database where datname = current_database()"
-            E.noParams
-            (D.singleRow (D.column (D.nonNullable D.jsonb)))
-    maintenance <-
-      runPgmqSession pool $
-        Session.statement () $
-          Statement.unpreparable
-            "select jsonb_build_object('tables', (select jsonb_agg(jsonb_build_object('table', pg_class.relname, 'options', reloptions, 'autoVacuumCount', autovacuum_count, 'autoAnalyzeCount', autoanalyze_count, 'manualVacuumCount', vacuum_count, 'manualAnalyzeCount', analyze_count, 'deadTuples', n_dead_tup)) from pg_class join pg_namespace on pg_namespace.oid = relnamespace join pg_stat_all_tables on pg_stat_all_tables.relid = pg_class.oid where nspname = 'pgmq' and pg_class.relname like 'q_perf_%'), 'checkpointer', (select to_jsonb(c) from pg_stat_checkpointer c))"
-            E.noParams
-            (D.singleRow (D.column (D.nonNullable D.jsonb)))
-    let count = length samples
-        seconds = fromIntegral (end - start) / 1e9 :: Double
-        p95 = if count == 0 then 0 else samples !! min (count - 1) (ceiling (0.95 * fromIntegral count :: Double) - 1)
-        valid = count >= 1000 && remaining.queueLength > fromIntegral (workers * fromIntegral batch)
-    pure $
-      object
-        [ "workerProcessCPUSeconds" .= (fromIntegral (cpuAfter - cpuBefore) / 1e12 :: Double),
-          "databaseIOCounters" .= databaseIO,
-          "maintenance" .= maintenance,
-          "administration" .= adminResult,
-          "clock" .= clockName,
-          "databaseSettings" .= databaseSettings,
-          "scenario" .= scenario,
-          "warmupSeconds" .= warmup,
-          "sampleSeconds" .= seconds,
-          "seedCount" .= seeds,
-          "committed" .= count,
-          "remaining" .= remaining.queueLength,
-          "throughput" .= (fromIntegral count / seconds),
-          "p95Ms" .= p95,
-          "allocatedPerCommit" .= (fromIntegral (allocated_bytes after - allocated_bytes before) / fromIntegral (max 1 count) :: Double),
-          "latenciesMs" .= samples,
-          "valid" .= valid,
-          "workerConnections" .= (4 :: Int),
-          "workers" .= workers,
-          "batchSize" .= batch,
-          "bodyBytes" .= bytes,
-          "fifo" .= fifo,
-          "metadata" .= metadata
-        ]
+    observations <- replicateM workers (newIORef ([] :: [Double]))
+    prepare adminPool measuring $ \finishAdmin -> do
+      stabilizeBenchmarkQueues pool [queue, dlq, secondDlq]
+      let worker ref = do
+            outcome <- runEff $ runErrorNoCallStack @PgmqRuntimeError $ runPgmq pool $ runTracingNoop $ do
+              adapter <- pgmqAdapter (mkPgmqAdapterEnv pool) config >>= either (error . show) pure
+              Stream.fold Fold.drain $
+                Stream.mapM
+                  ( \message -> do
+                      activeAtStart <- liftIO $ readIORef measuring
+                      start <- liftIO getMonotonicTimeNSec
+                      message.ack.finalize decision
+                      end <- liftIO getMonotonicTimeNSec
+                      liftIO $ do
+                        active <- readIORef measuring
+                        if activeAtStart && active && (case message.envelope.cursor of Just (CursorInt n) -> n > 0 && n <= fromIntegral seeds; _ -> error "worker fixture requires an original source message ID")
+                          then do
+                            let !latency = fromIntegral (end - start) / 1e6
+                            modifyIORef' ref (latency :)
+                          else pure ()
+                  )
+                  adapter.source
+            either throwIO pure outcome
+      withWorkers (map worker observations) $ \threads -> do
+        threadDelay (warmup * 1000000)
+        performMajorGC
+        before <- getRTSStats
+        cpuBefore <- getCPUTime
+        start <- getMonotonicTimeNSec
+        atomicWriteIORef measuring True
+        replicateM_ sample $ threadDelay 1000000
+        performMajorGC
+        after <- getRTSStats
+        atomicWriteIORef measuring False
+        end <- getMonotonicTimeNSec
+        cpuAfter <- getCPUTime
+        forM_ threads $ \thread ->
+          poll thread >>= \case
+            Nothing -> pure ()
+            Just (Left err) -> throwIO err
+            Just (Right ()) -> error "worker stopped before measurement completed"
+        mapM_ cancel threads
+        adminResult <- finishAdmin
+        samples <- sort . concat <$> mapM readIORef observations
+        remaining <- runPgmqSession pool $ Sessions.queueMetrics queue
+        databaseIO <-
+          runPgmqSession pool $
+            Session.statement () $
+              Statement.unpreparable
+                "select jsonb_build_object('blocksRead', blks_read, 'blocksHit', blks_hit, 'tempBytes', temp_bytes, 'blockReadTimeMs', blk_read_time, 'blockWriteTimeMs', blk_write_time) from pg_stat_database where datname = current_database()"
+                E.noParams
+                (D.singleRow (D.column (D.nonNullable D.jsonb)))
+        maintenance <-
+          runPgmqSession pool $
+            Session.statement () $
+              Statement.unpreparable
+                "select jsonb_build_object('tables', (select jsonb_agg(jsonb_build_object('table', pg_class.relname, 'options', reloptions, 'autoVacuumCount', autovacuum_count, 'autoAnalyzeCount', autoanalyze_count, 'manualVacuumCount', vacuum_count, 'manualAnalyzeCount', analyze_count, 'deadTuples', n_dead_tup)) from pg_class join pg_namespace on pg_namespace.oid = relnamespace join pg_stat_all_tables on pg_stat_all_tables.relid = pg_class.oid where nspname = 'pgmq' and pg_class.relname like 'q_perf_%'), 'checkpointer', (select to_jsonb(c) from pg_stat_checkpointer c))"
+                E.noParams
+                (D.singleRow (D.column (D.nonNullable D.jsonb)))
+        let count = length samples
+            seconds = fromIntegral (end - start) / 1e9 :: Double
+            p95 = if count == 0 then 0 else samples !! min (count - 1) (ceiling (0.95 * fromIntegral count :: Double) - 1)
+            valid = count >= 1000 && remaining.queueLength > fromIntegral (workers * fromIntegral batch)
+        pure $
+          object
+            [ "workerProcessCPUSeconds" .= (fromIntegral (cpuAfter - cpuBefore) / 1e12 :: Double),
+              "databaseIOCounters" .= databaseIO,
+              "maintenance" .= maintenance,
+              "administration" .= adminResult,
+              "clock" .= clockName,
+              "databaseSettings" .= databaseSettings,
+              "scenario" .= scenario,
+              "warmupSeconds" .= warmup,
+              "sampleSeconds" .= seconds,
+              "requestedSampleSeconds" .= sample,
+              "seedCount" .= seeds,
+              "committed" .= count,
+              "remaining" .= remaining.queueLength,
+              "throughput" .= (fromIntegral count / seconds),
+              "p95Ms" .= p95,
+              "allocatedPerCommit" .= (fromIntegral (allocated_bytes after - allocated_bytes before) / fromIntegral (max 1 count) :: Double),
+              "latenciesMs" .= samples,
+              "valid" .= valid,
+              "workerConnections" .= (4 :: Int),
+              "workers" .= workers,
+              "batchSize" .= batch,
+              "bodyBytes" .= bytes,
+              "fifo" .= fifo,
+              "metadata" .= metadata
+            ]
   either (error . show) pure result
   where
     checked = either (error . show) id
     whenTopic route action = if route == "topic" then void action else pure ()
+
+-- Nest scoped workers so partial startup and measurement failures also cancel
+-- every child before releasing its database pools.
+withWorkers :: [IO ()] -> ([Async ()] -> IO a) -> IO a
+withWorkers [] action = action []
+withWorkers (worker : rest) action =
+  withAsync worker $ \thread ->
+    withWorkers rest (action . (thread :))

@@ -284,6 +284,14 @@ paired intervals unpredictably. Worker artifacts retain maintenance settings and
 counters, and the acceptance checker rejects missing or uncontrolled setup. This
 controlled configuration is not a production database maintenance recommendation.
 
+Disposable performance databases use an explicit `shared_buffers = 512MB`
+on every side of a comparison. The temporary-database library's 12MB default
+forces repeated buffer reads while scanning the FIFO fixture. Increasing the
+buffer budget removes that source of work; it does not by itself establish
+latency repeatability or satisfy a performance gate. Actual database settings
+are retained in each worker record and must match between controls and candidate.
+Measurements made with different buffer budgets cannot be combined.
+
 
 The single-worker `ack-one` case uses a fixed 21 pairs by default
 (`--ack-one-pairs 21`) because its latency budget is only a few microseconds;
@@ -297,7 +305,8 @@ The `ack-fifo` worker case defaults to a 500,000-row source fixture
 (`--case-seed-count ack-fifo=500000`) on original, matched and candidate runs.
 Its whole-queue grouped-head query makes the former 3,000,000-row default an
 expensive way to collect very few acknowledgement observations. The smaller
-fixture increases sample density while retaining enough work for the interval;
+fixture increases sample density while retaining enough work for the interval. This does not
+increase the number of independent run pairs or establish repeatability;
 queue depletion still invalidates any run. Worker count, batch/group/body sizes,
 pools, durations and numeric limits are unchanged.
 
@@ -322,3 +331,29 @@ Use `--encoding-pairs 21` to choose a larger fixed encoding sample count before
 starting the full experiment. All cases still run; no selected-case extension or
 result-merging mode is maintained. The original extension commands used for the
 recorded investigation are historical and remain available at commit `6e99c40`.
+
+### Focused diagnosis
+
+Use `--repeatability ack-fifo` with the normal baseline and output arguments to
+run two copies of the **same original binary**, in alternating order on fresh
+fixtures. Both directions must satisfy the existing throughput, latency and
+allocation bounds. This builds only the original control. Its output is labeled
+`DLQ-REPEATABILITY`, with `scope: repeatability`; it cannot certify a release.
+Use `--worker-only ack-fifo` to compare only that worker case against both
+controls. Its output is labeled `DLQ-WORKER`, with `scope: worker`; it does not run
+or certify the remaining matrix. Sample counts are fixed before either run.
+Short `--smoke` runs exercise these commands but always remain inconclusive.
+
+A numeric gate is `PASS` when its upper one-sided 95% bootstrap bound meets the
+budget, `FAIL` when its lower one-sided 95% bound exceeds the budget, and
+`INCONCLUSIVE` otherwise. Both non-passing outcomes exit nonzero. More latency
+observations within one run do not substitute for independent run pairs.
+Historical artifacts retain their original classification and measurements.
+
+Worker sampling uses one strict latency buffer per worker and excludes operations
+that straddle warmup. RTS allocation snapshots precede worker cancellation and
+administration draining. The idle administration handle remains rooted throughout
+measurement. All worker and administration threads are scoped to the experiment.
+These instrumentation changes invalidate reuse of the older worker measurements.
+Resumption also verifies exact measured-source membership and executable hashes;
+older bundles without binary hashes must not be silently reused.

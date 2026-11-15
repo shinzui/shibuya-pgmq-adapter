@@ -3,10 +3,10 @@
 module Main (main) where
 
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async (async, wait)
+import Control.Concurrent.Async (wait, withAsync)
 import Control.Concurrent.QSem (newQSem, signalQSem, waitQSem)
 import Control.DeepSeq (force)
-import Control.Exception (bracket_, evaluate)
+import Control.Exception (bracket, bracket_, evaluate)
 import Control.Monad (forM, forM_, replicateM, unless, void)
 import Data.Aeson (Value (..), encode, object, (.=))
 import Data.ByteString.Lazy qualified as LBS
@@ -16,6 +16,7 @@ import Data.List (sort)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
 import Data.Vector qualified as V
+import Foreign.StablePtr (freeStablePtr, newStablePtr)
 import GHC.Stats (allocated_bytes, gc, gcdetails_live_bytes, getRTSStats, max_live_bytes)
 import Hasql.Decoders qualified as D
 import Hasql.Encoders qualified as E
@@ -41,12 +42,23 @@ main :: IO ()
 main = do
   args <- getArgs
   result <- case args of
-    ["worker", scenario, warm, sample, seeds, mode] ->
-      runWorker scenario (read warm) (read sample) (read seeds) (prepareAdmin mode (read sample))
-    ["reads", layout, depth, bytes, mode, warm, sample] ->
-      db $ \pool -> readMatrix pool layout (read depth) (read bytes) mode (read warm) (read sample)
-    ["retention", seconds] -> db $ \pool -> retention pool (read seconds)
-    ["encoding", mode, warm, seconds] -> encodingMatrix mode (read warm) (read seconds)
+    ["worker", scenario, warm, sample, seeds, mode]
+      | mode `elem` ["none", "idle", "load"] ->
+          runWorker scenario (read warm) (read sample) (read seeds) (prepareAdmin mode (read sample))
+    ["reads", layout, depth, bytes, mode, warm, sample]
+      | layout `elem` ["ordinary", "unlogged"],
+        mode `elem` ["raw", "adapter"],
+        (read depth :: Int) >= 502,
+        (read bytes :: Int) >= 2,
+        (read warm :: Int) >= 0,
+        (read sample :: Int) > 0 ->
+          db $ \pool -> readMatrix pool layout (read depth) (read bytes) mode (read warm) (read sample)
+    ["retention", seconds] | (read seconds :: Int) > 0 -> db $ \pool -> retention pool (read seconds)
+    ["encoding", mode, warm, seconds]
+      | mode `elem` ["current", "aware"],
+        (read warm :: Int) >= 0,
+        (read seconds :: Int) > 0 ->
+          encodingMatrix mode (read warm) (read seconds)
     _ -> error "expected worker/reads/retention/encoding arguments"
   LBC.putStrLn (encode result)
 
@@ -85,14 +97,16 @@ seed pool layout rows bytes = do
       <> ")"
   stabilizeBenchmarkQueues pool [source, dlq]
 
-prepareAdmin :: String -> Int -> Pool.Pool -> IORef Bool -> IO (IO Value)
-prepareAdmin mode seconds pool measuring
-  | mode == "none" = pure (pure Null)
+prepareAdmin :: String -> Int -> Pool.Pool -> IORef Bool -> (IO Value -> IO Value) -> IO Value
+prepareAdmin mode seconds pool measuring action
+  | mode == "none" = action (pure Null)
   | otherwise = do
       let admin = adminFor pool
       void $ evaluate admin
       if mode == "idle"
-        then pure (pure (object ["mode" .= mode]))
+        -- Evaluating to WHNF does not keep the handle alive across worker GCs.
+        then bracket (newStablePtr admin) freeStablePtr $ \_ ->
+          action (pure (object ["mode" .= mode]))
         else do
           -- Workers have already seeded their source. Only this separate DLQ is
           -- initialized here; avoid recreating the source queue.
@@ -103,40 +117,45 @@ prepareAdmin mode seconds pool measuring
           semaphore <- newQSem 2
           observations <- newIORef ([] :: [(Bool, Double, String)])
           started <- newIORef (0 :: Int)
-          driver <- async $ do
-            let awaitStart = readIORef measuring >>= \active -> unless active (threadDelay 1000 >> awaitStart)
-            awaitStart
-            origin <- getMonotonicTimeNSec
-            calls <- forM [0 .. seconds * 11 - 1] $ \index -> do
-              let slot = index `mod` 11
-                  scheduled = origin + fromIntegral (index `div` 11) * 1000000000 + fromIntegral slot * 90909090
-                  kind = if slot < 5 then "browse" else if slot < 10 then "fetch" else "redrive"
-              now <- getMonotonicTimeNSec
-              whenDelay scheduled now
-              async $ bracket_ (waitQSem semaphore) (signalQSem semaphore) $ do
-                atomicModifyIORef' started (\n -> (n + 1, ()))
-                ok <- case kind of
-                  "browse" ->
-                    browseDeadLetters admin dlq (DlqPageRequest 50 (Just (DlqCursor dlq (P.MessageId 10000)))) >>= \r -> case r of
-                      Right page -> consumePage page >> pure (V.length page.items == 50)
-                      Left _ -> pure False
-                  "fetch" ->
-                    fetchDeadLetter admin dlq (P.MessageId 20000) >>= \r -> case r of
-                      Right item -> consumeItem item >> pure True
-                      Left _ -> pure False
-                  _ ->
-                    redriveDeadLetter admin dlq (P.MessageId (fromIntegral (1 + index `div` 11))) >>= \r -> pure $ case r of
-                      Right (Redriven _) -> True
-                      _ -> False
-                end <- getMonotonicTimeNSec
-                atomicModifyIORef' observations (\xs -> ((ok, fromIntegral (end - scheduled) / 1e6, kind) : xs, ()))
-            pure calls
-          pure $ do
-            calls <- wait driver
-            completed <- timeout 5000000 (mapM_ wait calls)
+          let drive = do
+                let awaitStart = readIORef measuring >>= \active -> unless active (threadDelay 1000 >> awaitStart)
+                awaitStart
+                origin <- getMonotonicTimeNSec
+                let dispatch [] = pure ()
+                    dispatch (index : rest) = do
+                      let slot = index `mod` 11
+                          scheduled = origin + fromIntegral (index `div` 11) * 1000000000 + fromIntegral slot * 90909090
+                          kind = if slot < 5 then "browse" else if slot < 10 then "fetch" else "redrive"
+                      now <- getMonotonicTimeNSec
+                      whenDelay scheduled now
+                      withAsync
+                        ( bracket_ (waitQSem semaphore) (signalQSem semaphore) $ do
+                            atomicModifyIORef' started (\n -> (n + 1, ()))
+                            ok <- case kind of
+                              "browse" ->
+                                browseDeadLetters admin dlq (DlqPageRequest 50 (Just (DlqCursor dlq (P.MessageId 10000)))) >>= \r -> case r of
+                                  Right page -> consumePage page >> pure (V.length page.items == 50)
+                                  Left _ -> pure False
+                              "fetch" ->
+                                fetchDeadLetter admin dlq (P.MessageId 20000) >>= \r -> case r of
+                                  Right item -> consumeItem item >> pure True
+                                  Left _ -> pure False
+                              _ ->
+                                redriveDeadLetter admin dlq (P.MessageId (fromIntegral (1 + index `div` 11))) >>= \r -> pure $ case r of
+                                  Right (Redriven _) -> True
+                                  _ -> False
+                            end <- getMonotonicTimeNSec
+                            atomicModifyIORef' observations (\xs -> ((ok, fromIntegral (end - scheduled) / 1e6, kind) : xs, ()))
+                        )
+                        $ \call -> do
+                          dispatch rest
+                          wait call
+                dispatch [0 .. seconds * 11 - 1]
+          withAsync drive $ \driver -> action $ do
+            completed <- timeout 5000000 (wait driver)
             case completed of
               Nothing -> error "administration backlog exceeded five-second drain"
-              Just () -> pure ()
+              Just _ -> pure ()
             rows <- readIORef observations
             startedCount <- readIORef started
             let success = length (filter (\(ok, _, _) -> ok) rows)
@@ -313,18 +332,18 @@ encodingMatrix mode warm seconds = do
     let delta = queueAware - original
         expected = fromIntegral (LBS.length (encode (object ["original_queue" .= P.queueNameToText source])) - 1)
     unless (delta == expected) $ error "source field byte growth mismatch"
-    let runFor duration record = do
+    let runFor duration = do
           deadline <- (+ floor (duration * 1e9 :: Double)) <$> getMonotonicTimeNSec
           let batch nonce total = do
                 forM_ [nonce .. nonce + 99] $ \i -> void $ encodeOne aware metadata reason msg i
                 now <- getMonotonicTimeNSec
                 if now < deadline then batch (nonce + 100) (total + 100) else pure (total + 100 :: Int)
-          if record then batch 1 0 else batch 1 0
-    void $ runFor (fromIntegral warm / fromIntegral (length cases)) False
+          batch 1 0
+    void $ runFor (fromIntegral warm / fromIntegral (length cases))
     performMajorGC
     before <- getRTSStats
     start <- getMonotonicTimeNSec
-    n <- runFor (fromIntegral seconds / fromIntegral (length cases)) True
+    n <- runFor (fromIntegral seconds / fromIntegral (length cases))
     end <- getMonotonicTimeNSec
     performMajorGC
     after <- getRTSStats

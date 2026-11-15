@@ -8,4 +8,4 @@ import WorkerPerformance (runWorker)
 main :: IO ()
 main = do
   [scenario, warmup, sample, seeds] <- getArgs
-  runWorker scenario (read warmup) (read sample) (read seeds) (\_ _ -> pure (pure Null)) >>= LBS.putStrLn . encode
+  runWorker scenario (read warmup) (read sample) (read seeds) (\_ _ action -> action (pure Null)) >>= LBS.putStrLn . encode
