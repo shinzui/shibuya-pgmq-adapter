@@ -10,7 +10,7 @@ import Bench.Send qualified as Send
 import Bench.Throughput qualified as Throughput
 import BenchConfig (BenchConfig (..), loadConfig)
 import BenchSetup (installPgmqSchema, withBenchPool)
-import Test.Tasty.Bench (defaultMain)
+import Test.Tasty.Bench (bgroup, defaultMain)
 
 main :: IO ()
 main = do
@@ -19,14 +19,18 @@ main = do
     -- Install pgmq schema (idempotent)
     installPgmqSchema config.connectionString
 
-    -- Run all benchmarks
+    -- These Tasty actions include fixture setup and cleanup. Their reported
+    -- times describe a queue lifecycle, not an isolated operation latency.
     defaultMain
-      [ Send.benchmarks pool config,
-        Read.benchmarks pool config,
-        Ack.benchmarks pool config,
-        Fifo.benchmarks pool config,
-        MultiQueue.benchmarks pool config,
-        Throughput.benchmarks pool config,
-        Concurrent.benchmarks pool config,
-        Raw.benchmarks pool config
+      [ bgroup
+          "queue-lifecycle"
+          [ Send.benchmarks pool config,
+            Read.benchmarks pool config,
+            Ack.benchmarks pool config,
+            Fifo.benchmarks pool config,
+            MultiQueue.benchmarks pool config,
+            Throughput.benchmarks pool config,
+            Concurrent.benchmarks pool config,
+            Raw.benchmarks pool config
+          ]
       ]

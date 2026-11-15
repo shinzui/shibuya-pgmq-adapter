@@ -10,6 +10,8 @@ import BenchSetup
     runSession,
     seedQueue,
   )
+import Control.Exception (finally)
+import Control.Monad (unless)
 import Data.Aeson (object, (.=))
 import Data.Text qualified as Text
 import Data.Vector qualified as V
@@ -74,20 +76,18 @@ withQueue :: Pool.Pool -> BenchConfig -> String -> (QueueName -> IO a) -> IO a
 withQueue pool config suffix action = do
   let queue = benchQueueName ("raw_" <> Text.pack suffix)
   createBenchQueue pool queue
-  result <- action queue
-  purgeQueue pool queue
-  if config.skipCleanup then pure () else dropBenchQueue pool queue
-  pure result
+  action queue `finally` do
+    purgeQueue pool queue
+    if config.skipCleanup then pure () else dropBenchQueue pool queue
 
 withSeededQueue :: Pool.Pool -> BenchConfig -> String -> Int -> (QueueName -> IO a) -> IO a
 withSeededQueue pool config suffix count action = do
   let queue = benchQueueName ("raw_" <> Text.pack suffix)
   createBenchQueue pool queue
   seedQueue pool queue count Small
-  result <- action queue
-  purgeQueue pool queue
-  if config.skipCleanup then pure () else dropBenchQueue pool queue
-  pure result
+  action queue `finally` do
+    purgeQueue pool queue
+    if config.skipCleanup then pure () else dropBenchQueue pool queue
 
 -- Raw hasql operations
 
@@ -107,6 +107,7 @@ rawReadBatch :: Pool.Pool -> QueueName -> Int -> IO ()
 rawReadBatch pool queue n = do
   let req = Q.ReadMessage {queueName = queue, delay = 30, batchSize = Just (fromIntegral n), conditional = Nothing}
   msgs <- runSession pool $ Pgmq.readMessage req
+  unless (V.length msgs == n) $ fail "benchmark fixture returned an incomplete batch"
   deleteMessages pool queue msgs
 
 rawDelete :: Pool.Pool -> QueueName -> IO ()
@@ -117,7 +118,7 @@ rawDelete pool queue = do
     (Message msgId _ _ _ _ _ _ : _) -> do
       _ <- runSession pool $ Pgmq.deleteMessage Q.MessageQuery {queueName = queue, messageId = msgId}
       pure ()
-    [] -> pure ()
+    [] -> fail "benchmark fixture returned no message"
 
 -- Effectful layer operations
 
@@ -125,7 +126,7 @@ runEffectful :: Pool.Pool -> Eff '[Pgmq, Error PgmqRuntimeError, IOE] a -> IO ()
 runEffectful pool action = do
   result <- runEff . runErrorNoCallStack @PgmqRuntimeError . runPgmq pool $ action
   case result of
-    Left _ -> pure ()
+    Left err -> ioError (userError (show err))
     Right _ -> pure ()
 
 effSendSingle :: Pool.Pool -> QueueName -> IO ()
@@ -146,8 +147,10 @@ effReadBatch pool queue n = do
     let req = Q.ReadMessage {queueName = queue, delay = 30, batchSize = Just (fromIntegral n), conditional = Nothing}
     Eff.readMessage req
   case result of
-    Left _ -> pure ()
-    Right msgs -> deleteMessages pool queue msgs
+    Left err -> ioError (userError (show err))
+    Right msgs -> do
+      unless (V.length msgs == n) $ fail "benchmark fixture returned an incomplete batch"
+      deleteMessages pool queue msgs
 
 effDelete :: Pool.Pool -> QueueName -> IO ()
 effDelete pool queue = do
@@ -157,7 +160,7 @@ effDelete pool queue = do
     (Message msgId _ _ _ _ _ _ : _) -> runEffectful pool $ do
       _ <- Eff.deleteMessage Q.MessageQuery {queueName = queue, messageId = msgId}
       pure ()
-    [] -> pure ()
+    [] -> fail "benchmark fixture returned no message"
 
 deleteMessages :: Pool.Pool -> QueueName -> V.Vector Message -> IO ()
 deleteMessages pool queue msgs = do

@@ -205,14 +205,16 @@ Results from Apple M4 Max with PostgreSQL 17:
 | Read batch 10 | ~102 ms | ~123 ms |
 | Delete | ~137 ms | ~105 ms |
 
-The effectful layer adds minimal overhead (~5-20%) for most operations.
+These historical timings include fixture creation, seeding and cleanup. They
+do not measure effectful overhead or individual database-operation latency.
 
 ## Notes
 
 - Read benchmarks include seeding the queue with messages before running
 - Times include queue setup/teardown overhead for some benchmarks
 - Results may vary based on PostgreSQL configuration and hardware
-- FIFO grouped reads are significantly slower due to the additional ordering constraints
+- The Tasty suite is labeled `queue-lifecycle`: its outer timings include setup
+  and cleanup. Only the separately printed safe-FIFO drain timings exclude them.
 
 ## DLQ worker controls and queue-aware serialization
 

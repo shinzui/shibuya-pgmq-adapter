@@ -9,6 +9,8 @@ import BenchSetup
     runSession,
     seedQueue,
   )
+import Control.Exception (finally)
+import Control.Monad (unless)
 import Data.Text qualified as Text
 import Data.Vector qualified as V
 import Hasql.Pool qualified as Pool
@@ -65,15 +67,15 @@ withSeededQueue pool config suffix count action = do
   let queue = benchQueueName ("ack_" <> Text.pack suffix)
   createBenchQueue pool queue
   seedQueue pool queue count Small
-  result <- action queue
-  purgeQueue pool queue
-  if config.skipCleanup then pure () else dropBenchQueue pool queue
-  pure result
+  action queue `finally` do
+    purgeQueue pool queue
+    if config.skipCleanup then pure () else dropBenchQueue pool queue
 
 readMessages :: Pool.Pool -> QueueName -> Int -> IO [MessageId]
 readMessages pool queue n = do
   let req = Q.ReadMessage {queueName = queue, delay = 300, batchSize = Just (fromIntegral n), conditional = Nothing}
   msgs <- runSession pool $ Pgmq.readMessage req
+  unless (V.length msgs == n) $ fail "benchmark fixture returned an incomplete batch"
   pure $ V.toList $ V.map (\(Message mid _ _ _ _ _ _) -> mid) msgs
 
 runDeleteSingle :: Pool.Pool -> QueueName -> IO ()
@@ -83,13 +85,13 @@ runDeleteSingle pool queue = do
     (msgId : _) -> do
       _ <- runSession pool $ Pgmq.deleteMessage Q.MessageQuery {queueName = queue, messageId = msgId}
       pure ()
-    [] -> pure ()
+    [] -> fail "benchmark fixture returned no message"
 
 runDeleteBatch :: Pool.Pool -> QueueName -> Int -> IO ()
 runDeleteBatch pool queue n = do
   msgIds <- readMessages pool queue n
   if null msgIds
-    then pure ()
+    then fail "benchmark fixture returned no messages"
     else do
       _ <- runSession pool $ Pgmq.batchDeleteMessages Q.BatchMessageQuery {queueName = queue, messageIds = msgIds}
       pure ()
@@ -101,13 +103,13 @@ runArchiveSingle pool queue = do
     (msgId : _) -> do
       _ <- runSession pool $ Pgmq.archiveMessage Q.MessageQuery {queueName = queue, messageId = msgId}
       pure ()
-    [] -> pure ()
+    [] -> fail "benchmark fixture returned no message"
 
 runArchiveBatch :: Pool.Pool -> QueueName -> Int -> IO ()
 runArchiveBatch pool queue n = do
   msgIds <- readMessages pool queue n
   if null msgIds
-    then pure ()
+    then fail "benchmark fixture returned no messages"
     else do
       _ <- runSession pool $ Pgmq.batchArchiveMessages Q.BatchMessageQuery {queueName = queue, messageIds = msgIds}
       pure ()
@@ -119,13 +121,13 @@ runSetVtSingle pool queue = do
     (msgId : _) -> do
       _ <- runSession pool $ Pgmq.changeVisibilityTimeout Q.VisibilityTimeoutQuery {queueName = queue, messageId = msgId, visibilityTimeoutOffset = 60}
       pure ()
-    [] -> pure ()
+    [] -> fail "benchmark fixture returned no message"
 
 runSetVtBatch :: Pool.Pool -> QueueName -> Int -> IO ()
 runSetVtBatch pool queue n = do
   msgIds <- readMessages pool queue n
   if null msgIds
-    then pure ()
+    then fail "benchmark fixture returned no messages"
     else do
       _ <- runSession pool $ Pgmq.batchChangeVisibilityTimeout Q.BatchVisibilityTimeoutQuery {queueName = queue, messageIds = msgIds, visibilityTimeoutOffset = 60}
       pure ()
