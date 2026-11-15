@@ -26,6 +26,11 @@ provenance:
       at: 2026-10-27T02:14:13Z
       mode: "implement"
       note: "Resume against released PGMQ 0.7.0.0; complete unflagged administration and performance acceptance tooling and evidence."
+    - model: "claude-opus-5-5"
+      harness: "claude-code"
+      at: 2026-11-15T04:00:00Z
+      mode: "update"
+      note: "Close M4 by the user's recorded FIFO latency exception; record the 0.18.0.0 release and the committed audit harness."
 ---
 
 
@@ -49,14 +54,15 @@ Completion also requires measured performance acceptance. Compare existing worke
 - [x] M1 — Released PGMQ 0.7.0.0 and Shibuya core 0.12.0.0 support the unflagged producer-to-browse/fetch path (203 PostgreSQL examples, zero failures). On 2026-10-27, all seven worker workloads completed immutable original/matched/candidate controls in `.dev/dlq-release-fine-clock/`: 21 pairs for `ack-one`, seven elsewhere, with exact sources, dependencies, instrumentation, environment and raw measurements retained. Source/reason fields are exact. Numeric regression acceptance remains M4, including the fixed FIFO extension.
 - [x] M2 — Bounded browse/fetch, historical decoding and explicit physical registrations verified against released PGMQ 0.7.0.0 in the normal unflagged PostgreSQL suite on 2026-10-26. Tests compare all seven raw row fields, preserve invisible/malformed rows, cover 500-row lookahead, reject invalid requests before I/O, and verify separate-pool deadlines and setting cleanup.
 - [x] M3 — Default-off row-locked delete/send transactions verified on 2026-10-26 against released PGMQ 0.7.0.0, without a flag or temporary project. The clean final correctness suite passed 203 examples with zero failures, including 20 administration scenarios covering saved/missing/null headers, null payloads, normal handler input, concurrency, response-discard retry, rollback/recovery, cancellation, authorization and distinct topic fan-out copies.
-- [ ] M4 — Release validation completed: build, 203 PostgreSQL examples, 12 checker tests and package metadata checks pass. The corrected seven-triplet FIFO experiment plus unchanged retained evidence gives 196/198 numeric gates passing. FIFO original/matched p95 bounds are 1.106857/1.172465 versus 1.10. No further benchmark run or waiver is claimed.
+- [x] M4 — Release validation completed: build, 203 PostgreSQL examples, 12 checker tests and package metadata checks pass. The corrected seven-triplet FIFO experiment plus unchanged retained evidence gives 196/198 numeric gates passing. FIFO original/matched p95 bounds are 1.106857/1.172465 versus 1.10. Closed on 2026-10-27 by the user's explicit exception for the unresolved FIFO p95 gates (see Decision Log), not by a numeric pass; the gates remain INCONCLUSIVE. Released in 0.18.0.0 (commit `e549451`, tag `v0.18.0.0`).
 
 Current release dependency state: Hackage publishes `pgmq-hasql 0.7.0.0` with
 `Pgmq.Hasql.Statements.Inspection`; upstream tag `v0.7.0.0` resolves to
 `88afb93802f790c1ecfbd3ed8bcce196c4430d13`. The normal build requires the released
 family and Shibuya core 0.12.0.0, with the transitional administration flag removed.
 The fixed pre-feature source remains `e06e64b268055aca4eff78caabd1b0eb73aa1cd1`.
-Final handoff and actual numeric results are recorded below; no release has been published.
+Final handoff and actual numeric results are recorded below. The feature was released in
+0.18.0.0 on 2026-10-27.
 
 ## Surprises & Discoveries
 
@@ -92,6 +98,8 @@ Final handoff and actual numeric results are recorded below; no release has been
 
 2026-10-26 — Use raw monotonic timing on Darwin for sub-microsecond measurement precision. Before restarting with the corrected timer, fix the short-latency `ack-one` sample count at 21 pairs, with seven pairs for the other cases. Both satisfy the original minimum of seven. This is a predeclared complete sample count, not optional stopping or selecting favorable samples; run all 21 even if an earlier bound passes. Retain every prior experiment and every new pair. All original numeric budgets, workload rates, fixtures, pools, runtime capabilities and per-run warmup/sample durations remain unchanged.
 
+2026-10-27 — After reviewing the unresolved FIFO measurements, the user instructed: "just accept it." This is the explicit user scope decision the 2026-10-25 entry requires. Accept the original- and matched-baseline FIFO acknowledgement p95 uncertainty as a release exception and close the investigation. The gates remain INCONCLUSIVE: the exception does not turn them into PASS, establish a root cause, or prove the 10% bound, and the checker keeps the original numeric limits for future comparisons. No production regression was isolated; the successful FIFO acknowledgement path is unchanged from `e06e64b`.
+
 ## Outcomes & Retrospective
 
 The normal-build DLQ API is implemented with released PGMQ 0.7.0.0 and Shibuya
@@ -100,7 +108,8 @@ examples with zero failures, all 12 checker tests, and the changed bundle checks
 `cabal check` reports no errors or warnings. The 0.17.0.0 source package is
 `.dev/dlq-release-package/shibuya-pgmq-adapter-0.17.0.0.tar.gz`. Prior Haddock
 validation remains applicable because production Haskell/Cabal source hashes
-are unchanged. No package or tag has been published.
+are unchanged. The feature shipped in 0.18.0.0 (2026-10-27), paired with
+Shibuya core 0.12.0.0.
 
 The corrected FIFO experiment completed seven triplets, with 21 fresh and 344
 reused measurements. The final numeric result is 196/198 PASS. Original/matched
@@ -115,6 +124,17 @@ The user's goal was to release the feature with confidence about existing worker
 performance. Expanding benchmark machinery, treating an unproven hypothesis as
 a fix, and repeating long experiments failed that goal and consumed excessive
 time. Benchmark work has stopped; no further run is scheduled.
+
+A final audit (2026-10-27) found the disposable database's 12 MB shared buffer
+budget forced repeated reads of the ~130 MiB FIFO fixture, and that the checker
+labelled every interval straddling a limit FAIL. With 512 MB buffers and an
+INCONCLUSIVE classification, a focused FIFO comparison passed throughput and
+allocation against both controls but left both p95 gates INCONCLUSIVE. The user
+then accepted the remaining uncertainty as a release exception, closing M4 (see
+Decision Log and the [report](../performance/9-dlq-browse-and-redrive.md)). The
+audited harness, buffer setting and checker were committed on 2026-11-14 in
+`94d6a7a`; they invalidate reuse of older worker measurements, and the full
+matrix has not been rerun with them.
 
 FRIC-1 is resolved by the published inspection API. FRIC-2 is accepted with
 isolated Cabal build directories per dependency/optimization configuration.

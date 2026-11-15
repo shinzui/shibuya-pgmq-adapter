@@ -2,7 +2,79 @@
 
 Plan: [ExecPlan 9](../plans/9-expose-adapter-managed-dead-letter-queue-browse-and-redrive.md).
 
-Status: **release validation completed; numeric performance check failed**.
+Status: **Unresolved FIFO latency accepted by the user as an explicit exception
+on 2026-10-27. Investigation closed.**
+
+After reviewing the unresolved measurements, the user instructed: “just accept
+it.” This accepts the remaining original- and matched-baseline FIFO p95
+uncertainty as a release exception. The measurements remain INCONCLUSIVE; this
+decision does not turn them into PASS, establish a root cause, or prove the 10%
+latency bound. No production regression was isolated. The exception resolves
+this FIFO blocker and does not certify other release requirements. The original
+numeric limits remain in the checker for future comparisons.
+
+The October 27 audit distinguishes a demonstrated regression from insufficient
+evidence to pass. Both unresolved historical FIFO intervals straddle the 1.10
+limit; they are **INCONCLUSIVE** and do not satisfy numeric acceptance. Production
+source hashes were identical between the one-gate and two-gate results. The
+experiment changed from a 3,000,000-row fixture to 500,000 rows, with seven
+independent pairs in both cases. The matched median improved from 0.981830 to
+0.899244 while its upper bound widened from 1.077294 to 1.172465. This does not
+demonstrate a second production regression.
+
+The audit also found that the disposable database inherited a 12 MB shared
+buffer budget for a FIFO fixture measuring about 130 MiB including indexes.
+The benchmark now explicitly uses 512 MB for every comparison variant. A fresh
+focused FIFO comparison completed all 21 measurements: throughput and allocation
+passed against both controls, but both p95 gates remain **INCONCLUSIVE**. Their
+median / upper-bound ratios are 1.063104 / 1.379752 against original and
+1.025114 / 1.165004 against matched, with the unchanged 1.10 limit. This fixes
+unnecessary database buffer reads; it does not resolve latency acceptance.
+
+The audit evidence index is `.dev/fifo-investigation/summary.json`; the focused
+result is `.dev/fifo-investigation/validated-cache/result.json`. Diagnostics
+using interleaved raw deletes, altered runtime settings, or sampled server logs
+are not acceptance measurements. Neither concurrent work nor a production-code
+regression has been established as the cause of the latency excursions. The
+full matrix has not been rerun with the audited harness and buffer configuration;
+historical measurements cannot certify that configuration.
+
+### What changed, and what did not
+
+The successful FIFO acknowledgement branch in
+`shibuya-pgmq-adapter/src/Shibuya/Adapter/Pgmq/Internal.hs` is unchanged from
+`e06e64b`: `AckOk` still calls `deleteMessage` with the same retry and finalizer
+locking logic. The feature changes the dead-letter payload and adds administration
+operations. The dependency upgrade adds `deliveryStatus = pure DeliveryCurrent`
+when constructing an ingested message; the matched control includes that same
+compatibility change. Constructing an idle administration handle validates
+configuration but starts no threads and issues no database calls. These source
+facts narrow the candidate causes; they do not prove identical executable timing.
+
+The second failed label was caused by a new experiment, not a second production
+change. The checker previously called every upper bound above the budget `FAIL`,
+even when the interval also supported no regression. It now distinguishes that
+case as `INCONCLUSIVE`, while preserving the original PASS requirement and a
+nonzero exit for unresolved acceptance. No production slowdown has been isolated.
+
+A subsequent diagnostic tried alternating ten-second windows between the three
+executables. All 21 measurements completed, but it also left both latency gates
+inconclusive: original median / upper ratio 1.053004 / 1.185862; matched
+0.986193 / 1.290118. Throughput and allocation passed against both controls.
+Evidence is retained in `.dev/fifo-investigation/validated-interleaved/`.
+This did not solve the problem. Its scheduling protocol and extra dependency
+were removed from the proposed patch; the checker rejects its records as inputs
+to the continuous protocol. No measurements were discarded or relabeled PASS.
+
+The unsuccessful investigations into runtime tuning and operating-system behavior
+do not establish a cause and are not release evidence. The user accepted the
+unresolved latency requirement as the exception recorded above. This closes the
+investigation by an explicit acceptance decision, not by a demonstrated fix to
+production performance.
+
+## Historical release validation
+
+The following records the prior runner's results and its original FAIL labels.
 The corrected FIFO experiment completed all seven triplets (21 new measurements),
 reused 344 unchanged measurements, and recomputed all 198 gates: **196 PASS,
 2 FAIL**. Both failures are FIFO acknowledgement p95 upper bounds: original
@@ -17,7 +89,7 @@ result is `.dev/dlq-release-validated-fifo/result.json`. All 192 unaffected gate
 are identical to their previously retained results. Background Finder, XProtect
 and Spotlight activity was observed during the later samples; its contribution
 was not isolated, so it is not a proven explanation or a basis for discarding
-samples. No further benchmark experiment or budget waiver is claimed.
+samples. That historical result includes no budget waiver.
 
 The measured candidate is `d4dfba17d0be431ed6b7f7e30ad7f8722b4166d8`,
 using released PGMQ 0.7.0.0 and Shibuya core 0.12.0.0. Subsequent changes affect
